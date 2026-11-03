@@ -324,7 +324,10 @@ class Gadget:
                     log(f"RX {'new ' if is_new else ''}{fmt(p)}")
                 if self.ack and p["type"] & 0x60 and not p["type"] & 0x80:
                     txq.put(duml.build(p["dst"], p["src"], p["seq"], 0x80, p["set"], p["id"], b"\x00"))
-            if self.rec_video or not has_video:
+            if has_video and not self.rec_video:
+                # keep the DUML blocks of a mixed read, drop the video
+                data = b"".join(duml.wrap(f) for ch, f in duml.blocks(data) if ch != duml.CH_VIDEO)
+            if data:
                 self.raw.write(data)
                 self.rec.write(struct.pack("<dI", t, len(data)) + data)
             if t - t_last >= 2:

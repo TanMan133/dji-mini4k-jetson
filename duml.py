@@ -98,3 +98,23 @@ def records(path):
         t, n = struct.unpack_from("<dI", d, i)
         yield t, d[i + 12:i + 12 + n]
         i += 12 + n
+
+
+# RC-N1C stick report: RC (0x06) -> app, set 06 id 05, ~9 Hz, mapped 2026-11-02 (Mode 2).
+STICK_MIN, STICK_CENTER, STICK_MAX = 364, 1024, 1684
+FLIGHT_MODES = {0x2000: "C", 0x1000: "N", 0x0000: "S"}  # ch5 bits 12-13 (C = Cine, S = Sport)
+BUTTONS_CH5 = {0x0800: "rth"}  # Flight Pause / RTH
+BUTTONS_TAIL = {0x10: "fn", 0x01: "photo_video", 0x40: "shutter"}
+
+
+def parse_sticks(payload):
+    """Decode a set 06 id 05 payload (6 x u16 LE + 1 byte).
+
+    Sticks and wheel are raw 364..1684, centre 1024. Up / right is the high end."""
+    roll, pitch, throttle, yaw, wheel, sw = struct.unpack_from("<6H", payload)
+    tail = payload[12] if len(payload) > 12 else 0
+    buttons = [n for bit, n in BUTTONS_CH5.items() if sw & bit]
+    buttons += [n for bit, n in BUTTONS_TAIL.items() if tail & bit]
+    return dict(roll=roll, pitch=pitch, throttle=throttle, yaw=yaw, wheel=wheel,
+                mode=FLIGHT_MODES.get(sw & 0x3000, hex(sw & 0x3000)), buttons=buttons,
+                raw_switches=sw, raw_tail=tail)

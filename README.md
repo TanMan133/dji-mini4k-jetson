@@ -24,6 +24,23 @@ Inject DUML commands into a running session: `echo "06 06 2f 40 01" > capture/li
 - No IDR/CRA frames: gradual decoding refresh. NVDEC needs `nvv4l2decoder is-gdr-stream=true`;
   the first ~8 frames after joining show a green, not-yet-refreshed area (live_view.py skips 15).
 
+## RC stick report (set 06 id 05, RC -> app, ~9 Hz)
+
+Payload = 6 x u16 LE + 1 byte. Decode with `duml.parse_sticks()`; mapped with `tools/stick_map.py`.
+
+| field | stick (Mode 2) | low end | centre | high end |
+|---|---|---|---|---|
+| u16[0] | right stick left/right (roll) | 364 = left | 1024 | 1684 = right |
+| u16[1] | right stick up/down (pitch) | 364 = down | 1024 | 1684 = up |
+| u16[2] | left stick up/down (throttle) | 364 = down | 1024 | 1684 = up |
+| u16[3] | left stick left/right (yaw) | 364 = left | 1024 | 1684 = right |
+| u16[4] | camera wheel | 388 seen | 1024 | 1673 seen |
+| u16[5] | flight mode bits 12-13: 0x2000 C, 0x1000 N, 0x0000 S; bit 11 (0x0800) = RTH button | | | |
+| byte 12 | buttons: 0x10 Fn, 0x01 photo/video, 0x40 shutter | | | |
+
+Short button presses can fall between two reports (~110 ms apart).
+RC battery: set 06 id 1e, bytes 4 = percent.
+
 ## Gotchas
 
 - Blocking FunctionFS reads deadlock a UDC unbind (process stuck in D state): ep0 is
