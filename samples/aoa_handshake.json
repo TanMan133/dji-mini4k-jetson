@@ -1,0 +1,12 @@
+{
+  "protocol_queries": 1,
+  "strings": {
+    "manufacturer": "DJI",
+    "model": "com.dji.logiclink",
+    "description": "DJI RC-N1C",
+    "version": "de\u0000v04.11.00.",
+    "uri": "www.dji.com",
+    "serial": "8QKXNC90020URA"
+  },
+  "started": true
+}
