@@ -140,6 +140,7 @@ class Follower:
         self.size_goal = None       # box height / frame height to hold (--distance)
         self.ex_f = 0.0             # filtered horizontal error
         self.lost = False
+        self.dist_f = 0.0           # filtered relative size error
         self.out = dict(roll=STICK_CENTER, pitch=STICK_CENTER, throttle=STICK_CENTER, yaw=STICK_CENTER)
         self.preview = Preview(args.port, self.cmds) if args.port else None
         fifo = os.path.join(args.out, "follow.fifo")
@@ -205,19 +206,31 @@ class Follower:
             e = 0.0 if abs(self.ex_f) < self.a.deadband else self.ex_f
             o["yaw"] = STICK_CENTER + max(-self.a.yaw_max, min(self.a.yaw_max, self.a.k_yaw * e)) * half
             if self.a.distance and self.size_goal != "off":
-                size = (box[3] - box[1]) / h
-                clipped = box[1] <= 0.02 * h or box[3] >= 0.98 * h  # head or feet out of frame
+                # Distance cues, as fractions of the frame: box height needs head and feet in
+                # view; box width (shoulders/arms) still works close up, when height is cut off.
+                cut_v = box[1] <= 0.02 * h or box[3] >= 0.98 * h
+                cut_h = box[0] <= 0.02 * w or box[2] >= 0.98 * w
+                cues = {}
+                if not cut_v:
+                    cues["height"] = (box[3] - box[1]) / h
+                if not cut_h:
+                    cues["width"] = (box[2] - box[0]) / w
                 if self.size_goal is None:
-                    if size > self.a.max_start_size or clipped:
-                        print(f"{time.strftime('%H:%M:%S')} target fills {size:.2f} of the frame height"
-                              f"{' and is cut off' if clipped else ''}: too close for distance hold, yaw only", flush=True)
+                    if not cues:
+                        print(f"{time.strftime('%H:%M:%S')} target cut off on all sides: no distance hold, yaw only", flush=True)
                         self.size_goal = "off"
                         return o
-                    self.size_goal = size
-                    print(f"{time.strftime('%H:%M:%S')} distance hold: keeping size {size:.2f}", flush=True)
-                if not clipped:  # a clipped box says nothing about distance: hold
-                    de = self.size_goal - size           # >0: target smaller (farther) -> forward
-                    de = 0.0 if abs(de) < self.a.size_deadband else de
+                    self.size_goal = dict(cues)
+                    self.dist_f = 0.0
+                    print(f"{time.strftime('%H:%M:%S')} distance hold: keeping "
+                          + ", ".join(f"{k} {v:.2f}" for k, v in cues.items()), flush=True)
+                cue = next((k for k in ("height", "width") if k in cues and k in self.size_goal), None)
+                if cue is None:
+                    self.dist_f = 0.0  # no valid cue this frame: hold
+                else:
+                    rel = (self.size_goal[cue] - cues[cue]) / self.size_goal[cue]  # >0: smaller (farther) -> forward
+                    self.dist_f += self.a.dist_smooth * (rel - self.dist_f)
+                    de = 0.0 if abs(self.dist_f) < self.a.size_deadband else self.dist_f
                     o["pitch"] = STICK_CENTER + max(-self.a.pitch_max, min(self.a.pitch_max, self.a.k_dist * de)) * half
         return o
 
@@ -319,11 +332,10 @@ def main():
     ap.add_argument("--deadband", type=float, default=0.08, help="horizontal error ignored, fraction of half-width")
     ap.add_argument("--smooth", type=float, default=0.5, help="error low-pass factor per frame")
     ap.add_argument("--distance", action="store_true", help="also hold distance with pitch (stretch goal)")
-    ap.add_argument("--k-dist", type=float, default=1.5)
+    ap.add_argument("--k-dist", type=float, default=1.0, help="pitch fraction per relative size change")
     ap.add_argument("--pitch-max", type=float, default=0.2)
-    ap.add_argument("--size-deadband", type=float, default=0.04)
-    ap.add_argument("--max-start-size", type=float, default=0.8,
-                    help="no distance hold if the target is taller than this fraction of the frame at follow start")
+    ap.add_argument("--size-deadband", type=float, default=0.08, help="relative size change ignored")
+    ap.add_argument("--dist-smooth", type=float, default=0.3, help="size-error low-pass factor per frame")
     ap.add_argument("--lost-s", type=float, default=0.5)
     ap.add_argument("--takeoff-height", type=float, default=1.0, help="m")
     ap.add_argument("--takeoff-throttle", type=float, default=0.5, help="fraction of full up")
