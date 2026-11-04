@@ -157,7 +157,8 @@ class Follower:
         if not os.path.exists(fifo):
             os.mkfifo(fifo)
         threading.Thread(target=self._read_cmds, args=(fifo,), daemon=True).start()
-        self.log = csv.writer(open(os.path.join(args.out, f"follow-{time.strftime('%H%M%S')}.csv"), "w"))
+        # line-buffered: readers (the flight scripts' liveness checks) see each frame as it happens
+        self.log = csv.writer(open(os.path.join(args.out, f"follow-{time.strftime('%H%M%S')}.csv"), "w", buffering=1))
         self.log.writerow(["t", "mode", "n_people", "cx", "cy", "h", "ex", "size", "roll", "pitch",
                            "throttle", "yaw", "height_m", "fc_state", "fc_flags"])
 
