@@ -8,6 +8,9 @@ Modes (change with commands written to <out>/follow.fifo, one per line):
   idle     sticks not sent (ESP32 holds centre)       [start-up mode]
   hover    all sticks centre
   follow   yaw keeps the target centred; with --distance, pitch keeps its size.
+           With --target hand (pose engine): yaw looks at your raised hand, throttle
+           keeps the drone level with it, pitch keeps --dist-m from your shoulders
+           (+ --reach-m); lower your hand below your elbow and the drone holds.
            While the target is out of view the sticks centre (the drone holds) and
            following resumes when it is seen again.
   land     throttle held down until the drone is down and the motors stop
@@ -34,9 +37,11 @@ SW2 = land (throttle down until stopped); both latch until released with R.
 import argparse
 import csv
 import http.server
+import math
 import os
 import queue
 import socketserver
+import sys
 import threading
 import time
 
@@ -47,6 +52,7 @@ from live_view import WARMUP_FRAMES, open_capture
 from rc_control import STICK_CENTER, STICK_MAX, STICK_MIN, Esp, Sticks, StickReports
 
 MODES = ("idle", "hover", "follow", "land", "start", "takeoff")
+VIDEO_ENDED = 3  # exit code: restart me (run_follow.sh does)
 
 
 CONTROL_PAGE = b"""<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -133,6 +139,7 @@ class Follower:
         self.sticks = None if args.dry else Sticks(Esp(), args.cal)
         self.det = PersonDetector(args.engine, conf=args.conf)
         self.mode = "idle"
+        self.exit_code = 0
         self.mode_t = time.time()
         self.cmds = queue.Queue()
         self.target = None          # last chosen box
@@ -140,7 +147,10 @@ class Follower:
         self.size_goal = None       # box height / frame height to hold (--distance)
         self.ex_f = 0.0             # filtered horizontal error
         self.lost = False
-        self.dist_f = 0.0           # filtered relative size error
+        self.dist_f = 0.0           # filtered relative size error (person) or metres (hand)
+        self.ey_f = 0.0             # filtered vertical error (hand)
+        self.hand = None            # (x, y) of the raised hand being followed
+        self.dist_now = None        # estimated distance to the person, m (hand mode)
         self.out = dict(roll=STICK_CENTER, pitch=STICK_CENTER, throttle=STICK_CENTER, yaw=STICK_CENTER)
         self.preview = Preview(args.port, self.cmds) if args.port else None
         fifo = os.path.join(args.out, "follow.fifo")
@@ -174,6 +184,55 @@ class Follower:
         tx, ty = (self.target[0] + self.target[2]) / 2, (self.target[1] + self.target[3]) / 2
         return min(people, key=lambda b: ((b[0] + b[2]) / 2 - tx) ** 2 + ((b[1] + b[3]) / 2 - ty) ** 2)
 
+    # ---- hand target (pose engine): COCO keypoints 5/6 shoulders, 7/8 elbows, 9/10 wrists ----
+    def hand_of(self, person):
+        """The higher raised hand (wrist above its elbow), pushed a little past the wrist."""
+        if person is None or len(person) < 6:
+            return None
+        k = person[5]
+        best = None
+        for el, wr in ((7, 9), (8, 10)):
+            if k[el, 2] < 0.5 or k[wr, 2] < 0.5 or k[wr, 1] > k[el, 1]:
+                continue
+            hand = (k[wr, 0] + 0.3 * (k[wr, 0] - k[el, 0]), k[wr, 1] + 0.3 * (k[wr, 1] - k[el, 1]))
+            if best is None or hand[1] < best[1]:
+                best = hand
+        return best
+
+    def body_distance(self, person, w):
+        """Distance to the person from shoulder width, m (assumes --shoulder-m and --hfov)."""
+        k = person[5]
+        if k[5, 2] < 0.5 or k[6, 2] < 0.5:
+            return None
+        px = abs(k[5, 0] - k[6, 0])
+        if px < 8:
+            return None  # side-on: shoulders overlap, no estimate
+        f = (w / 2) / math.tan(math.radians(self.a.hfov) / 2)
+        return f * self.a.shoulder_m / px
+
+    def follow_hand(self, o, person, w, h, height, half):
+        if self.hand is None:
+            return o
+        hx, hy = self.hand
+        ex = (hx / w - 0.5) * 2
+        self.ex_f += self.a.smooth * (ex - self.ex_f)
+        e = 0.0 if abs(self.ex_f) < self.a.deadband else self.ex_f
+        o["yaw"] = STICK_CENTER + max(-self.a.yaw_max, min(self.a.yaw_max, self.a.k_yaw * e)) * half
+        ey = (hy / h - 0.5) * 2                        # >0: hand below centre -> descend
+        self.ey_f += self.a.smooth * (ey - self.ey_f)
+        e = 0.0 if abs(self.ey_f) < self.a.alt_deadband else self.ey_f
+        climb = max(-self.a.thr_max, min(self.a.thr_max, -self.a.k_alt * e))
+        if height is not None and ((climb > 0 and height > self.a.ceiling) or (climb < 0 and height < self.a.floor)):
+            climb = 0.0
+        o["throttle"] = STICK_CENTER + climb * half
+        d = self.dist_now = self.body_distance(person, w)
+        if d is not None:
+            err = d - (self.a.dist_m + self.a.reach_m)  # >0: too far -> forward
+            self.dist_f += self.a.dist_smooth * (err - self.dist_f)
+            de = 0.0 if abs(self.dist_f) < self.a.dist_deadband_m else self.dist_f
+            o["pitch"] = STICK_CENTER + max(-self.a.pitch_max, min(self.a.pitch_max, self.a.k_m * de)) * half
+        return o
+
     def control(self, box, w, h, now):
         o = dict(roll=STICK_CENTER, pitch=STICK_CENTER, throttle=STICK_CENTER, yaw=STICK_CENTER)
         half = (STICK_MAX - STICK_MIN) / 2
@@ -199,6 +258,8 @@ class Follower:
             else:
                 gentle = height is not None and height > 0.5
                 o["throttle"] = STICK_CENTER - 0.5 * half if gentle else STICK_MIN
+        elif self.mode == "follow" and box is not None and self.a.target == "hand":
+            return self.follow_hand(o, box, w, h, height, half)
         elif self.mode == "follow" and box is not None:
             cx = (box[0] + box[2]) / 2
             ex = (cx / w - 0.5) * 2                     # -1 (left edge) .. +1 (right edge)
@@ -245,7 +306,10 @@ class Follower:
                 ok, frame = cap.read()
                 now = time.time()
                 if not ok:
+                    # e.g. the drone switched H.264 <-> H.265; a second decoder can't be opened in this
+                    # process, so exit with VIDEO_ENDED and let run_follow.sh restart us
                     print("video ended", flush=True)
+                    self.exit_code = VIDEO_ENDED
                     break
                 stalled = now - last_frame > 0.3
                 last_frame = now
@@ -270,7 +334,11 @@ class Follower:
                 h, w = frame.shape[:2]
                 people = self.det(frame)
                 box = self.pick(people, w, h)
-                if box is not None:
+                if self.a.target == "hand":
+                    self.hand = self.hand_of(box)
+                    self.dist_now = None
+                found = (self.hand is not None) if self.a.target == "hand" else (box is not None)
+                if found:
                     self.target, self.target_t = box, now
 
                 osd = self.reports.osd
@@ -291,9 +359,14 @@ class Follower:
                 elif self.sticks:
                     self.sticks.esp.release()
 
-                size = (box[3] - box[1]) / h if box is not None else ""
+                if self.a.target == "hand":
+                    size = f"{self.dist_now:.2f}" if self.dist_now else ""   # metres in hand mode
+                else:
+                    size = (box[3] - box[1]) / h if box is not None else ""
                 self.log.writerow([f"{now:.3f}", self.mode, len(people),
-                                   *(((box[0] + box[2]) / 2, (box[1] + box[3]) / 2, box[3] - box[1]) if box else ("", "", "")),
+                                   *((self.hand[0], self.hand[1], "") if self.a.target == "hand" and self.hand else
+                                     ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2, box[3] - box[1]) if box and self.a.target != "hand"
+                                     else ("", "", "")),
                                    f"{self.ex_f:.3f}", size, *[round(self.out[k]) for k in ("roll", "pitch", "throttle", "yaw")],
                                    osd["height_m"] if osd else "", osd["state"] if osd else "", osd["flags"] if osd else ""])
                 if self.preview and n % 2 == 0:
@@ -306,10 +379,16 @@ class Follower:
 
     def draw(self, frame, people, box, osd):
         for b in people:
-            col = (0, 255, 0) if box is not None and b == box else (160, 160, 160)
+            col = (0, 255, 0) if b is box else (160, 160, 160)
             cv2.rectangle(frame, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), col, 2)
         h, w = frame.shape[:2]
         cv2.line(frame, (w // 2, 0), (w // 2, h), (255, 255, 255), 1)
+        if self.a.target == "hand":
+            cv2.line(frame, (0, h // 2), (w, h // 2), (255, 255, 255), 1)
+            if self.hand is not None:
+                cv2.circle(frame, (int(self.hand[0]), int(self.hand[1])), 18, (0, 200, 255), 4)
+            if self.dist_now:
+                cv2.putText(frame, f"{self.dist_now:.2f} m", (10, h - 16), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 200, 255), 2)
         txt = (f"{self.mode.upper()}{'  MOTORS' if osd and osd.get('motors_on') else ''}  yaw {self.out['yaw']:.0f} pitch {self.out['pitch']:.0f} "
                f"thr {self.out['throttle']:.0f}  h {osd['height_m'] if osd else '?'} m  {osd['state'] if osd else ''}"
                + (f"  bat {self.reports.battery['percent']}%" if self.reports.battery else "")
@@ -321,7 +400,8 @@ class Follower:
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--out", default="capture/live", help="gadget output dir (video.fifo) and log dir")
-    ap.add_argument("--engine", default="models/yolo11n-fp16.engine")
+    ap.add_argument("--target", choices=("person", "hand"), default="person")
+    ap.add_argument("--engine", help="default: yolo11n-fp16 for person, yolo11n-pose-fp16 for hand")
     ap.add_argument("--cal", default="calibration/sticks.json")
     ap.add_argument("--udp", type=int, default=9870)
     ap.add_argument("--port", type=int, default=8090, help="MJPEG preview port, 0 = off")
@@ -337,11 +417,27 @@ def main():
     ap.add_argument("--size-deadband", type=float, default=0.08, help="relative size change ignored")
     ap.add_argument("--dist-smooth", type=float, default=0.3, help="size-error low-pass factor per frame")
     ap.add_argument("--lost-s", type=float, default=0.5)
+    # hand target
+    ap.add_argument("--dist-m", type=float, default=1.75, help="distance to keep, m (hand mode)")
+    ap.add_argument("--reach-m", type=float, default=0.0, help="added to --dist-m: how far the hand is in front of the shoulders")
+    ap.add_argument("--shoulder-m", type=float, default=0.40, help="assumed shoulder width, m")
+    ap.add_argument("--hfov", type=float, default=73.7, help="camera horizontal field of view, deg")
+    ap.add_argument("--k-m", type=float, default=0.3, help="pitch fraction per metre of distance error")
+    ap.add_argument("--dist-deadband-m", type=float, default=0.15)
+    ap.add_argument("--k-alt", type=float, default=0.6, help="throttle fraction per unit of vertical error")
+    ap.add_argument("--thr-max", type=float, default=0.3, help="throttle cap, fraction of full deflection")
+    ap.add_argument("--alt-deadband", type=float, default=0.1)
+    ap.add_argument("--ceiling", type=float, default=2.5, help="no climbing above this reported height, m")
+    ap.add_argument("--floor", type=float, default=0.3, help="no descending below this reported height, m")
     ap.add_argument("--takeoff-height", type=float, default=1.0, help="m")
     ap.add_argument("--takeoff-throttle", type=float, default=0.5, help="fraction of full up")
     ap.add_argument("--takeoff-timeout", type=float, default=4.0, help="s of climbing before giving up")
     args = ap.parse_args()
-    Follower(args).run()
+    if not args.engine:
+        args.engine = "models/yolo11n-pose-fp16.engine" if args.target == "hand" else "models/yolo11n-fp16.engine"
+    f = Follower(args)
+    f.run()
+    sys.exit(f.exit_code)
 
 
 if __name__ == "__main__":

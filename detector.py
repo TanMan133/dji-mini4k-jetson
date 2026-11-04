@@ -3,6 +3,10 @@
   det = PersonDetector("models/yolo11n-fp16.engine")
   people = det(frame_bgr)   # [(x1, y1, x2, y2, score), ...] in frame pixels, best first
 
+With the pose engine (yolo11n-pose-fp16.engine) each detection also carries
+its 17 COCO keypoints as a (17, 3) array of x, y, confidence in frame pixels:
+  [(x1, y1, x2, y2, score, keypoints), ...]
+
 Build the engine once (models/ is git-ignored):
   /home/netra/ptz-node/.venv/bin/python -c "from ultralytics import YOLO; YOLO('yolo11n.pt').export(format='onnx', imgsz=640, opset=17, simplify=True)"
   /usr/src/tensorrt/bin/trtexec --onnx=yolo11n.onnx --saveEngine=yolo11n-fp16.engine --fp16
@@ -66,12 +70,14 @@ class PersonDetector:
         _check(cudart.cudaStreamSynchronize(self.stream))
 
         pred = self.h_out[0].astype(np.float32)  # (84, 8400): cx, cy, w, h, 80 class scores
-        scores = pred[4 + PERSON]
+        pose = pred.shape[0] == 56               # (56, 8400): cx, cy, w, h, person score, 17 x (x, y, conf)
+        scores = pred[4] if pose else pred[4 + PERSON]
         keep = scores > self.conf
         if not keep.any():
             return []
         cx, cy, bw, bh = pred[0, keep], pred[1, keep], pred[2, keep], pred[3, keep]
         sc = scores[keep]
+        kps = pred[5:, keep].T.reshape(-1, 17, 3) if pose else None
         x1 = (cx - bw / 2 - left) / s
         y1 = (cy - bh / 2 - top) / s
         boxes = np.stack([x1, y1, bw / s, bh / s], 1)
@@ -80,5 +86,11 @@ class PersonDetector:
         out = []
         for i in np.array(idx).reshape(-1):
             bx, by, bw_, bh_ = boxes[i]
-            out.append((max(0.0, bx), max(0.0, by), min(w, bx + bw_), min(h, by + bh_), float(sc[i])))
+            det = (max(0.0, bx), max(0.0, by), min(w, bx + bw_), min(h, by + bh_), float(sc[i]))
+            if pose:
+                k = kps[i].copy()
+                k[:, 0] = (k[:, 0] - left) / s
+                k[:, 1] = (k[:, 1] - top) / s
+                det += (k,)
+            out.append(det)
         return sorted(out, key=lambda b: -b[4])
