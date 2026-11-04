@@ -83,7 +83,11 @@ def main():
                 print(f"  NOTE: IO{ESP_PINS[k]} moves '{ch}', not '{name}' (wires swapped?) - using '{ch}'")
             pts = build_table(rows, ch)
             lo, hi = pts[0][1], pts[-1][1]
-            centre = interp_duty(pts, STICK_CENTER)
+            # the RC has a dead zone around centre: use the middle of the duties that read exactly 1024
+            dead = [d for d, v in rows if v[ch] == STICK_CENTER]
+            centre = (min(dead) + max(dead)) / 2 if dead else interp_duty(pts, STICK_CENTER)
+            if dead:
+                print(f"  dead zone: duty {min(dead)}..{max(dead)} all read {STICK_CENTER}")
             print(f"  -> {ch}: reaches {lo}..{hi}, centre at duty {centre and round(centre)}"
                   f"{'' if lo <= STICK_MIN and hi >= STICK_MAX else '  (does not cover the full 364..1684)'}")
             outputs.append({"esp_pin": ESP_PINS[k], "intended": name, "report_channel": ch, "points": pts,

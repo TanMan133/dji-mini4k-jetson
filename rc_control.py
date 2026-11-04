@@ -68,6 +68,8 @@ class Esp:
         self.ser.dtr = False
         self.ser.rts = False
         self.ser.open()
+        time.sleep(0.5)  # opening the port restarts the S3; let it boot, drop its boot log
+        self.ser.reset_input_buffer()
         self.duty = None  # None = send nothing, the ESP32 falls back to neutral
         self.lock = threading.Lock()
         self.period = 1.0 / rate_hz
@@ -126,8 +128,8 @@ class Sticks:
 
     def duty_for(self, i, value):
         c = self.cal[i]
-        if not c.get("points"):
-            return c.get("centre_duty", DUTY_MAX / 2)
+        if not c.get("points") or value == STICK_CENTER:
+            return c.get("centre_duty", DUTY_MAX / 2)  # middle of the RC's centre dead zone
         vals = [v for _, v in c["points"]]  # increasing
         duts = [d for d, _ in c["points"]]
         value = max(vals[0], min(vals[-1], value))
