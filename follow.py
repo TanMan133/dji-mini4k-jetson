@@ -173,6 +173,7 @@ class Follower:
         self.hand = None            # (x, y) of the raised hand being followed
         self.dist_now = None        # estimated distance to the person, m (hand mode)
         self.lead_state = {}
+        self.raised_since = None    # when the current raised hand was first seen
         self.out = dict(roll=STICK_CENTER, pitch=STICK_CENTER, throttle=STICK_CENTER, yaw=STICK_CENTER, wheel=STICK_CENTER)
         self.preview = Preview(args.port, self.cmds) if args.port else None
         fifo = os.path.join(args.out, "follow.fifo")
@@ -224,14 +225,26 @@ class Follower:
 
     # ---- hand target (pose engine): COCO keypoints 5/6 shoulders, 7/8 elbows, 9/10 wrists ----
     def hand_of(self, person):
-        """The higher raised hand (wrist above its elbow), pushed a little past the wrist."""
+        """The higher deliberately raised hand, pushed a little past the wrist, or None.
+
+        A control hand: wrist above its elbow; the person facing the drone (both
+        shoulders visible and apart, not side-on); the wrist away from the face
+        (drinking, phone, scratching don't count). COCO keypoints: 0 nose,
+        5/6 shoulders, 7/8 elbows, 9/10 wrists."""
         if person is None or len(person) < 6:
             return None
         k = person[5]
+        if k[5, 2] < 0.5 or k[6, 2] < 0.5:
+            return None
+        shoulder_px = abs(k[5, 0] - k[6, 0])
+        if shoulder_px < self.a.min_facing * (person[3] - person[1]):
+            return None  # side-on
         best = None
         for el, wr in ((7, 9), (8, 10)):
             if k[el, 2] < 0.5 or k[wr, 2] < 0.5 or k[wr, 1] > k[el, 1]:
                 continue
+            if k[0, 2] >= 0.5 and math.hypot(k[wr, 0] - k[0, 0], k[wr, 1] - k[0, 1]) < 0.6 * shoulder_px:
+                continue  # hand at the face
             hand = (k[wr, 0] + 0.3 * (k[wr, 0] - k[el, 0]), k[wr, 1] + 0.3 * (k[wr, 1] - k[el, 1]))
             if best is None or hand[1] < best[1]:
                 best = hand
@@ -396,7 +409,13 @@ class Follower:
                 people = self.det(frame)
                 box = self.pick(people, w, h)
                 if self.a.target == "hand":
-                    self.hand = self.hand_of(box)
+                    hand = self.hand_of(box)
+                    if hand is None:
+                        self.raised_since = None
+                    elif self.raised_since is None:
+                        self.raised_since = now
+                    # a hand takes control only after being held up for --arm-s (a passing pose doesn't)
+                    self.hand = hand if hand is not None and now - self.raised_since >= self.a.arm_s else None
                     self.dist_now = None
                 found = (self.hand is not None) if self.a.target == "hand" else (box is not None)
                 if found:
@@ -486,8 +505,12 @@ def main():
     ap.add_argument("--lost-s", type=float, default=0.5)
     # hand target
     ap.add_argument("--dist-m", type=float, default=1.75, help="distance to keep, m (hand mode)")
+    ap.add_argument("--arm-s", type=float, default=0.5, help="hand must be held up this long before it controls")
+    ap.add_argument("--min-facing", type=float, default=0.15,
+                    help="shoulder width / person height below this = side-on, hand ignored")
     ap.add_argument("--reach-m", type=float, default=0.0, help="added to --dist-m: how far the hand is in front of the shoulders")
-    ap.add_argument("--shoulder-m", type=float, default=0.40, help="assumed shoulder width, m")
+    ap.add_argument("--shoulder-m", type=float, default=0.338,
+                    help="assumed shoulder width, m (distcal 2026-11-04 at 1.75 m gave 0.338)")
     ap.add_argument("--hfov", type=float, default=73.7, help="camera horizontal field of view, deg")
     ap.add_argument("--k-m", type=float, default=0.3, help="pitch fraction per metre of distance error")
     ap.add_argument("--dist-deadband-m", type=float, default=0.15)
