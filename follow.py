@@ -124,12 +124,29 @@ class Preview:
         srv.daemon_threads = True
         threading.Thread(target=srv.serve_forever, daemon=True).start()
 
-    def push(self, frame):
-        ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-        if ok:
-            with self.cv:
-                self.jpeg = jpg.tobytes()
-                self.cv.notify_all()
+        self.pending = None
+        self.pending_cv = threading.Condition()
+        threading.Thread(target=self._encoder, daemon=True).start()
+
+    def push(self, frame, annotate):
+        """Hand over the latest frame; drawing and JPEG encoding happen off the control loop."""
+        with self.pending_cv:
+            self.pending = (frame, annotate)
+            self.pending_cv.notify()
+
+    def _encoder(self):
+        while True:
+            with self.pending_cv:
+                while self.pending is None:
+                    self.pending_cv.wait()
+                frame, annotate = self.pending
+                self.pending = None
+            annotate(frame)
+            ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if ok:
+                with self.cv:
+                    self.jpeg = jpg.tobytes()
+                    self.cv.notify_all()
 
 
 class Follower:
@@ -151,6 +168,7 @@ class Follower:
         self.ey_f = 0.0             # filtered vertical error (hand)
         self.hand = None            # (x, y) of the raised hand being followed
         self.dist_now = None        # estimated distance to the person, m (hand mode)
+        self.lead_state = {}
         self.out = dict(roll=STICK_CENTER, pitch=STICK_CENTER, throttle=STICK_CENTER, yaw=STICK_CENTER)
         self.preview = Preview(args.port, self.cmds) if args.port else None
         fifo = os.path.join(args.out, "follow.fifo")
@@ -160,7 +178,7 @@ class Follower:
         # line-buffered: readers (the flight scripts' liveness checks) see each frame as it happens
         self.log = csv.writer(open(os.path.join(args.out, f"follow-{time.strftime('%H%M%S')}.csv"), "w", buffering=1))
         self.log.writerow(["t", "mode", "n_people", "cx", "cy", "h", "ex", "size", "roll", "pitch",
-                           "throttle", "yaw", "height_m", "fc_state", "fc_flags"])
+                           "throttle", "yaw", "height_m", "fc_state", "fc_flags", "proc_ms"])
 
     def _read_cmds(self, fifo):
         while True:
@@ -184,6 +202,19 @@ class Follower:
             return people[0]  # most confident
         tx, ty = (self.target[0] + self.target[2]) / 2, (self.target[1] + self.target[3]) / 2
         return min(people, key=lambda b: ((b[0] + b[2]) / 2 - tx) ** 2 + ((b[1] + b[3]) / 2 - ty) ** 2)
+
+    def lead(self, name, value, now):
+        """value + its rate of change x --lead-s: aim where the target will be once the
+        command takes effect (video + control delay). Rate is low-passed; 0 = off."""
+        if self.a.lead_s <= 0:
+            return value
+        prev = self.lead_state.get(name)
+        rate = 0.0
+        if prev is not None and now > prev[0]:
+            raw = (value - prev[1]) / (now - prev[0])
+            rate = prev[2] + 0.3 * (raw - prev[2])
+        self.lead_state[name] = (now, value, rate)
+        return max(-1.2, min(1.2, value + rate * self.a.lead_s))
 
     # ---- hand target (pose engine): COCO keypoints 5/6 shoulders, 7/8 elbows, 9/10 wrists ----
     def hand_of(self, person):
@@ -217,11 +248,13 @@ class Follower:
         hx, hy = self.hand
         ex = (hx / w - 0.5) * 2
         self.ex_f += self.a.smooth * (ex - self.ex_f)
-        e = 0.0 if abs(self.ex_f) < self.a.deadband else self.ex_f
+        ex_l = self.lead("x", self.ex_f, time.time())
+        e = 0.0 if abs(ex_l) < self.a.deadband else ex_l
         o["yaw"] = STICK_CENTER + max(-self.a.yaw_max, min(self.a.yaw_max, self.a.k_yaw * e)) * half
         ey = (hy / h - 0.5) * 2                        # >0: hand below centre -> descend
         self.ey_f += self.a.smooth * (ey - self.ey_f)
-        e = 0.0 if abs(self.ey_f) < self.a.alt_deadband else self.ey_f
+        ey_l = self.lead("y", self.ey_f, time.time())
+        e = 0.0 if abs(ey_l) < self.a.alt_deadband else ey_l
         climb = max(-self.a.thr_max, min(self.a.thr_max, -self.a.k_alt * e))
         if height is not None and ((climb > 0 and height > self.a.ceiling) or (climb < 0 and height < self.a.floor)):
             climb = 0.0
@@ -265,7 +298,8 @@ class Follower:
             cx = (box[0] + box[2]) / 2
             ex = (cx / w - 0.5) * 2                     # -1 (left edge) .. +1 (right edge)
             self.ex_f += self.a.smooth * (ex - self.ex_f)
-            e = 0.0 if abs(self.ex_f) < self.a.deadband else self.ex_f
+            ex_l = self.lead("x", self.ex_f, now)
+            e = 0.0 if abs(ex_l) < self.a.deadband else ex_l
             o["yaw"] = STICK_CENTER + max(-self.a.yaw_max, min(self.a.yaw_max, self.a.k_yaw * e)) * half
             if self.a.distance and self.size_goal != "off":
                 # Distance cues, as fractions of the frame: box height needs head and feet in
@@ -297,7 +331,7 @@ class Follower:
         return o
 
     def run(self):
-        cap = open_capture(os.path.join(self.a.out, "video.fifo"))
+        cap = open_capture(os.path.join(self.a.out, "video.fifo"), *((640, 360) if self.a.small else (None, None)))
         if not cap.isOpened():
             raise SystemExit("video pipeline did not open (is aoa_gadget.py running with --video?)")
         n, last_frame = 0, time.time()
@@ -305,7 +339,7 @@ class Follower:
         try:
             while True:
                 ok, frame = cap.read()
-                now = time.time()
+                now = time.time()  # frame in hand
                 if not ok:
                     # e.g. the drone switched H.264 <-> H.265; a second decoder can't be opened in this
                     # process, so exit with VIDEO_ENDED and let run_follow.sh restart us
@@ -359,6 +393,7 @@ class Follower:
                     self.sticks.set(**self.out)
                 elif self.sticks:
                     self.sticks.esp.release()
+                proc_ms = (time.time() - now) * 1000  # frame in hand -> sticks sent
 
                 if self.a.target == "hand":
                     size = f"{self.dist_now:.2f}" if self.dist_now else ""   # metres in hand mode
@@ -369,16 +404,17 @@ class Follower:
                                      ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2, box[3] - box[1]) if box and self.a.target != "hand"
                                      else ("", "", "")),
                                    f"{self.ex_f:.3f}", size, *[round(self.out[k]) for k in ("roll", "pitch", "throttle", "yaw")],
-                                   osd["height_m"] if osd else "", osd["state"] if osd else "", osd["flags"] if osd else ""])
+                                   osd["height_m"] if osd else "", osd["state"] if osd else "", osd["flags"] if osd else "",
+                                   f"{proc_ms:.1f}"])
                 if self.preview and n % 2 == 0:
-                    self.draw(frame, people, box, osd)
-                    self.preview.push(frame)
+                    snap = (list(people), box, osd, dict(self.out), self.hand, self.dist_now, self.mode)
+                    self.preview.push(frame, lambda f, snap=snap: self.draw(f, *snap))
         finally:
             cap.release()  # before CUDA goes away, or nvvidconv errors on the way out
             if self.sticks:
                 self.sticks.esp.close()
 
-    def draw(self, frame, people, box, osd):
+    def draw(self, frame, people, box, osd, out, hand, dist_now, mode):
         for b in people:
             col = (0, 255, 0) if b is box else (160, 160, 160)
             cv2.rectangle(frame, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), col, 2)
@@ -386,12 +422,12 @@ class Follower:
         cv2.line(frame, (w // 2, 0), (w // 2, h), (255, 255, 255), 1)
         if self.a.target == "hand":
             cv2.line(frame, (0, h // 2), (w, h // 2), (255, 255, 255), 1)
-            if self.hand is not None:
-                cv2.circle(frame, (int(self.hand[0]), int(self.hand[1])), 18, (0, 200, 255), 4)
-            if self.dist_now:
-                cv2.putText(frame, f"{self.dist_now:.2f} m", (10, h - 16), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 200, 255), 2)
-        txt = (f"{self.mode.upper()}{'  MOTORS' if osd and osd.get('motors_on') else ''}  yaw {self.out['yaw']:.0f} pitch {self.out['pitch']:.0f} "
-               f"thr {self.out['throttle']:.0f}  h {osd['height_m'] if osd else '?'} m  {osd['state'] if osd else ''}"
+            if hand is not None:
+                cv2.circle(frame, (int(hand[0]), int(hand[1])), 18, (0, 200, 255), 4)
+            if dist_now:
+                cv2.putText(frame, f"{dist_now:.2f} m", (10, h - 16), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 200, 255), 2)
+        txt = (f"{mode.upper()}{'  MOTORS' if osd and osd.get('motors_on') else ''}  yaw {out['yaw']:.0f} pitch {out['pitch']:.0f} "
+               f"thr {out['throttle']:.0f}  h {osd['height_m'] if osd else '?'} m  {osd['state'] if osd else ''}"
                + (f"  bat {self.reports.battery['percent']}%" if self.reports.battery else "")
                + ("  DRY" if self.a.dry else ""))
         cv2.rectangle(frame, (0, 0), (w, 34), (0, 0, 0), -1)
@@ -407,11 +443,15 @@ def main():
     ap.add_argument("--udp", type=int, default=9870)
     ap.add_argument("--port", type=int, default=8090, help="MJPEG preview port, 0 = off")
     ap.add_argument("--dry", action="store_true", help="compute and log, never send sticks")
+    ap.add_argument("--full-res", dest="small", action="store_false",
+                    help="decode to 1280x720 instead of 640x360 (the detector sees 640 px either way)")
     ap.add_argument("--conf", type=float, default=0.45)
     ap.add_argument("--k-yaw", type=float, default=0.6, help="yaw stick fraction per unit of horizontal error")
     ap.add_argument("--yaw-max", type=float, default=0.35, help="yaw stick cap, fraction of full deflection")
     ap.add_argument("--deadband", type=float, default=0.08, help="horizontal error ignored, fraction of half-width")
     ap.add_argument("--smooth", type=float, default=0.5, help="error low-pass factor per frame")
+    ap.add_argument("--lead-s", type=float, default=0.0,
+                    help="aim this far ahead along the target's motion (offsets video delay; try 0.15-0.3)")
     ap.add_argument("--distance", action="store_true", help="also hold distance with pitch (stretch goal)")
     ap.add_argument("--k-dist", type=float, default=1.0, help="pitch fraction per relative size change")
     ap.add_argument("--pitch-max", type=float, default=0.2)

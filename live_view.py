@@ -21,10 +21,12 @@ Gst.init(None)
 
 # DJI sends no IDR/CRA frames (gradual decoding refresh), so NVDEC must be told
 # to start decoding without one: is-gdr-stream=true. {codec} is h264 or h265.
+# {scale} lets nvvidconv resize on the GPU (",width=640,height=360"): the detector
+# sees 640 px anyway, and the CPU then never touches a full 1280x720 frame.
 PIPELINE = (
     "filesrc location={fifo} ! {codec}parse ! "
     "nvv4l2decoder is-gdr-stream=true ! "
-    "nvvidconv ! video/x-raw,format=BGRx ! videoconvert ! video/x-raw,format=BGR ! "
+    "nvvidconv ! video/x-raw,format=BGRx{scale} ! videoconvert ! video/x-raw,format=BGR ! "
     "appsink name=sink drop=true max-buffers=1 sync=false"
 )
 # After (re)joining the stream, the bottom of the picture is green until the
@@ -86,8 +88,9 @@ class GstCapture:
             self.pipe = None
 
 
-def open_capture(fifo):
-    return GstCapture(PIPELINE.format(fifo=fifo, codec=wait_codec(fifo)))
+def open_capture(fifo, width=None, height=None):
+    scale = f",width={width},height={height}" if width and height else ""
+    return GstCapture(PIPELINE.format(fifo=fifo, codec=wait_codec(fifo), scale=scale))
 
 
 def infer(frame):

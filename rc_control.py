@@ -98,8 +98,10 @@ class Esp:
             return self.ser.readline().decode(errors="replace").strip()
 
     def set_duty(self, duties):
+        """Send at once (no wait for the keepalive tick); the keepalive re-sends to feed the timeout."""
         with self.lock:
             self.duty = [max(0, min(DUTY_MAX, int(round(d)))) for d in duties]
+            self.ser.write(("D " + " ".join(str(d) for d in self.duty) + "\n").encode())
 
     def release(self):
         """Stop sending; the ESP32 returns to neutral after its timeout."""
