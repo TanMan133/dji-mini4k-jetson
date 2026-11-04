@@ -131,10 +131,12 @@ class Preview:
         self.pending_cv = threading.Condition()
         threading.Thread(target=self._encoder, daemon=True).start()
 
-    def push(self, frame, annotate):
-        """Hand over the latest frame; drawing and JPEG encoding happen off the control loop."""
+    def push(self, frame, annotate, save_path=None):
+        """Hand over the latest frame; drawing, JPEG encoding and saving happen off the control loop."""
         with self.pending_cv:
-            self.pending = (frame, annotate)
+            if self.pending is not None and self.pending[2] and not save_path:
+                return  # don't overwrite a frame that is waiting to be saved
+            self.pending = (frame, annotate, save_path)
             self.pending_cv.notify()
 
     def _encoder(self):
@@ -142,10 +144,13 @@ class Preview:
             with self.pending_cv:
                 while self.pending is None:
                     self.pending_cv.wait()
-                frame, annotate = self.pending
+                frame, annotate, save_path = self.pending
                 self.pending = None
             annotate(frame)
             ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if ok and save_path:
+                with open(save_path, "wb") as f:
+                    f.write(jpg.tobytes())
             if ok:
                 with self.cv:
                     self.jpeg = jpg.tobytes()
@@ -174,8 +179,16 @@ class Follower:
         self.dist_now = None        # estimated distance to the person, m (hand mode)
         self.lead_state = {}
         self.raised_since = None    # when the current raised hand was first seen
+        self.hand_kept, self.hand_kept_t = None, 0.0  # last controlling hand (lenient tracking)
+        self.hand_reason = ""
+        self.frame_w, self.frame_h = 640, 360
         self.out = dict(roll=STICK_CENTER, pitch=STICK_CENTER, throttle=STICK_CENTER, yaw=STICK_CENTER, wheel=STICK_CENTER)
         self.preview = Preview(args.port, self.cmds) if args.port else None
+        self.save_dir = None
+        self.last_save = 0.0
+        if args.save_fps > 0 and self.preview:
+            self.save_dir = os.path.join(args.out, f"frames-{time.strftime('%H%M%S')}")
+            os.makedirs(self.save_dir, exist_ok=True)
         fifo = os.path.join(args.out, "follow.fifo")
         if not os.path.exists(fifo):
             os.mkfifo(fifo)
@@ -183,7 +196,7 @@ class Follower:
         # line-buffered: readers (the flight scripts' liveness checks) see each frame as it happens
         self.log = csv.writer(open(os.path.join(args.out, f"follow-{time.strftime('%H%M%S')}.csv"), "w", buffering=1))
         self.log.writerow(["t", "mode", "n_people", "cx", "cy", "h", "ex", "size", "roll", "pitch",
-                           "throttle", "yaw", "height_m", "fc_state", "fc_flags", "proc_ms"])
+                           "throttle", "yaw", "height_m", "fc_state", "fc_flags", "proc_ms", "hand_reason"])
 
     def _read_cmds(self, fifo):
         while True:
@@ -224,31 +237,57 @@ class Follower:
         return max(-1.2, min(1.2, value + rate * self.a.lead_s))
 
     # ---- hand target (pose engine): COCO keypoints 5/6 shoulders, 7/8 elbows, 9/10 wrists ----
-    def hand_of(self, person):
-        """The higher deliberately raised hand, pushed a little past the wrist, or None.
-
-        A control hand: wrist above its elbow; the person facing the drone (both
-        shoulders visible and apart, not side-on); the wrist away from the face
-        (drinking, phone, scratching don't count). COCO keypoints: 0 nose,
-        5/6 shoulders, 7/8 elbows, 9/10 wrists."""
-        if person is None or len(person) < 6:
-            return None
+    def hand_of(self, person, keep=None):
+        """(hand_xy, reason). Taking control (keep=None) needs a deliberate gesture: wrist above
+        its elbow, facing the drone (shoulders apart, not side-on), wrist away from the face.
+        Keeping control (keep = last hand xy) only needs a wrist near the last hand that is
+        not clearly below its elbow, so close up a missing elbow or a hand by the head doesn't
+        drop it. COCO keypoints: 0 nose, 5/6 shoulders, 7/8 elbows, 9/10 wrists."""
+        if person is None:
+            return None, "no person"
+        if len(person) < 6:
+            return None, "no keypoints"
         k = person[5]
+        if keep is not None:
+            gate = 0.25 * self.frame_w
+            best = None
+            for el, wr in ((7, 9), (8, 10)):
+                if k[wr, 2] < 0.4:
+                    continue
+                if k[el, 2] >= 0.4 and k[wr, 1] > k[el, 1] + 0.05 * self.frame_h:
+                    continue  # lowered
+                if k[el, 2] >= 0.4:
+                    hand = (k[wr, 0] + 0.3 * (k[wr, 0] - k[el, 0]), k[wr, 1] + 0.3 * (k[wr, 1] - k[el, 1]))
+                else:
+                    hand = (float(k[wr, 0]), float(k[wr, 1]))  # elbow out of frame: the wrist will do
+                dist = math.hypot(hand[0] - keep[0], hand[1] - keep[1])
+                if dist < gate and (best is None or dist < best[0]):
+                    best = (dist, hand)
+            return (best[1], "kept") if best else (None, "lost: no wrist near the last hand")
         if k[5, 2] < 0.5 or k[6, 2] < 0.5:
-            return None
+            return None, "shoulders not visible"
         shoulder_px = abs(k[5, 0] - k[6, 0])
         if shoulder_px < self.a.min_facing * (person[3] - person[1]):
-            return None  # side-on
-        best = None
+            return None, "side-on"
+        best, why, rank = None, "no arm visible", 0
         for el, wr in ((7, 9), (8, 10)):
-            if k[el, 2] < 0.5 or k[wr, 2] < 0.5 or k[wr, 1] > k[el, 1]:
+            # report the arm that got furthest: not visible < down < at the face
+            if k[el, 2] < 0.5 or k[wr, 2] < 0.5:
+                if k[wr, 2] >= 0.5:  # wrist seen, elbow not (out of frame up close): the arm that matters
+                    why, rank = (why, rank) if rank >= 2.5 else ("elbow not visible", 2.5)
+                else:
+                    why, rank = (why, rank) if rank >= 1 else ("elbow or wrist not visible", 1)
                 continue
-            if k[0, 2] >= 0.5 and math.hypot(k[wr, 0] - k[0, 0], k[wr, 1] - k[0, 1]) < 0.6 * shoulder_px:
-                continue  # hand at the face
+            if k[wr, 1] > k[el, 1]:
+                why, rank = (why, rank) if rank >= 2 else ("hand down (wrist below elbow)", 2)
+                continue
+            if k[0, 2] >= 0.5 and math.hypot(k[wr, 0] - k[0, 0], k[wr, 1] - k[0, 1]) < self.a.face_dist * shoulder_px:
+                why, rank = "hand at the face", 3
+                continue
             hand = (k[wr, 0] + 0.3 * (k[wr, 0] - k[el, 0]), k[wr, 1] + 0.3 * (k[wr, 1] - k[el, 1]))
             if best is None or hand[1] < best[1]:
                 best = hand
-        return best
+        return (best, "raised") if best else (None, why)
 
     def body_distance(self, person, w):
         """Distance to the person from shoulder width, m (assumes --shoulder-m and --hfov)."""
@@ -409,13 +448,23 @@ class Follower:
                 people = self.det(frame)
                 box = self.pick(people, w, h)
                 if self.a.target == "hand":
-                    hand = self.hand_of(box)
-                    if hand is None:
-                        self.raised_since = None
-                    elif self.raised_since is None:
-                        self.raised_since = now
-                    # a hand takes control only after being held up for --arm-s (a passing pose doesn't)
-                    self.hand = hand if hand is not None and now - self.raised_since >= self.a.arm_s else None
+                    self.frame_w, self.frame_h = w, h
+                    keeping = self.hand_kept is not None and now - self.hand_kept_t < self.a.lost_s
+                    hand, self.hand_reason = self.hand_of(box, self.hand_kept if keeping else None)
+                    if keeping:
+                        self.hand = hand
+                    else:
+                        if hand is None:
+                            self.raised_since = None
+                        elif self.raised_since is None:
+                            self.raised_since = now
+                        # a hand takes control only after being held up for --arm-s (a passing pose doesn't)
+                        armed = hand is not None and now - self.raised_since >= self.a.arm_s
+                        self.hand = hand if armed else None
+                        if hand is not None and not armed:
+                            self.hand_reason = f"raised, arming {now - self.raised_since:.1f}s"
+                    if self.hand is not None:
+                        self.hand_kept, self.hand_kept_t = self.hand, now
                     self.dist_now = None
                 found = (self.hand is not None) if self.a.target == "hand" else (box is not None)
                 if found:
@@ -450,22 +499,35 @@ class Follower:
                                      else ("", "", "")),
                                    f"{self.ex_f:.3f}", size, *[round(self.out[k]) for k in ("roll", "pitch", "throttle", "yaw")],
                                    osd["height_m"] if osd else "", osd["state"] if osd else "", osd["flags"] if osd else "",
-                                   f"{proc_ms:.1f}"])
-                if self.preview and n % 2 == 0:
-                    snap = (list(people), box, osd, dict(self.out), self.hand, self.dist_now, self.mode)
-                    self.preview.push(frame, lambda f, snap=snap: self.draw(f, *snap))
+                                   f"{proc_ms:.1f}", self.hand_reason if self.a.target == "hand" else ""])
+                save = self.save_dir and now - self.last_save >= 1.0 / self.a.save_fps
+                if self.preview and (n % 2 == 0 or save):
+                    snap = (list(people), box, osd, dict(self.out), self.hand, self.dist_now, self.mode, self.hand_reason)
+                    path = os.path.join(self.save_dir, f"{now:.3f}-{self.mode}.jpg") if save else None
+                    if save:
+                        self.last_save = now
+                    self.preview.push(frame, lambda f, snap=snap: self.draw(f, *snap), path)
         finally:
             cap.release()  # before CUDA goes away, or nvvidconv errors on the way out
             if self.sticks:
                 self.sticks.esp.close()
 
-    def draw(self, frame, people, box, osd, out, hand, dist_now, mode):
+    def draw(self, frame, people, box, osd, out, hand, dist_now, mode, reason=""):
         for b in people:
             col = (0, 255, 0) if b is box else (160, 160, 160)
             cv2.rectangle(frame, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), col, 2)
         h, w = frame.shape[:2]
         cv2.line(frame, (w // 2, 0), (w // 2, h), (255, 255, 255), 1)
         if self.a.target == "hand":
+            if box is not None and len(box) > 5:
+                k = box[5]
+                for a_, b_ in ((5, 6), (5, 7), (7, 9), (6, 8), (8, 10)):
+                    if k[a_, 2] >= 0.4 and k[b_, 2] >= 0.4:
+                        cv2.line(frame, (int(k[a_, 0]), int(k[a_, 1])), (int(k[b_, 0]), int(k[b_, 1])), (255, 160, 0), 2)
+                for i in (0, 5, 6, 7, 8, 9, 10):
+                    if k[i, 2] >= 0.4:
+                        cv2.circle(frame, (int(k[i, 0]), int(k[i, 1])), 4, (255, 160, 0), -1)
+            cv2.putText(frame, reason, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
             cv2.line(frame, (0, h // 2), (w, h // 2), (255, 255, 255), 1)
             if hand is not None:
                 cv2.circle(frame, (int(hand[0]), int(hand[1])), 18, (0, 200, 255), 4)
@@ -487,6 +549,8 @@ def main():
     ap.add_argument("--cal", default="calibration/sticks.json")
     ap.add_argument("--udp", type=int, default=9870)
     ap.add_argument("--port", type=int, default=8090, help="MJPEG preview port, 0 = off")
+    ap.add_argument("--save-fps", type=float, default=10.0,
+                    help="save annotated frames at this rate into <out>/frames-HHMMSS (0 = off)")
     ap.add_argument("--dry", action="store_true", help="compute and log, never send sticks")
     ap.add_argument("--full-res", dest="small", action="store_false",
                     help="decode to 1280x720 instead of 640x360 (the detector sees 640 px either way)")
@@ -506,6 +570,8 @@ def main():
     # hand target
     ap.add_argument("--dist-m", type=float, default=1.75, help="distance to keep, m (hand mode)")
     ap.add_argument("--arm-s", type=float, default=0.5, help="hand must be held up this long before it controls")
+    ap.add_argument("--face-dist", type=float, default=0.35,
+                    help="a wrist closer than this many shoulder widths to the nose is 'at the face' (drinking, phone)")
     ap.add_argument("--min-facing", type=float, default=0.15,
                     help="shoulder width / person height below this = side-on, hand ignored")
     ap.add_argument("--reach-m", type=float, default=0.0, help="added to --dist-m: how far the hand is in front of the shoulders")
