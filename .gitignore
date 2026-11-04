@@ -4,3 +4,7 @@ __pycache__/
 *.fifo
 .pio/
 calibration/
+.venv/
+models/*.pt
+models/*.onnx
+models/*.engine

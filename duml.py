@@ -118,3 +118,24 @@ def parse_sticks(payload):
     return dict(roll=roll, pitch=pitch, throttle=throttle, yaw=yaw, wheel=wheel,
                 mode=FLIGHT_MODES.get(sw & 0x3000, hex(sw & 0x3000)), buttons=buttons,
                 raw_switches=sw, raw_tail=tail)
+
+
+# Flight controller status ("OSD general"): FC (0x03) -> app, set 03 id 43, ~10 Hz.
+# Layout from o-gs dji-firmware-tools comm_dissector (dji-dumlv1-flyc.lua).
+FLYC_STATES = {0x00: "Manual", 0x01: "Atti", 0x03: "Atti_Hover", 0x04: "Hover", 0x06: "GPS_Atti",
+               0x0a: "AssistedTakeoff", 0x0b: "AutoTakeoff", 0x0c: "AutoLanding", 0x0d: "AttiLanding",
+               0x0f: "GoHome", 0x11: "Joystick", 0x17: "Atti_Limited", 0x18: "GPS_Atti_Limited",
+               0x1f: "Sport", 0x21: "ForceLanding", 0x29: "EngineStart"}
+
+
+def parse_osd_general(payload):
+    """Decode a set 03 id 43 payload (55 B on the Mini 4K, relayed by the ground radio 0x0e).
+
+    height/velocity/attitude match the o-gs layout and read sensibly on the ground.
+    The flag word does NOT match it on this drone (0x00805000 when parked, motors off);
+    its motor/in-air bits are still to be identified, so it is returned raw."""
+    lon, lat, h, vgx, vgy, vgz, pitch, roll, yaw = struct.unpack_from("<2d7h", payload)
+    state, _cmd, flags = struct.unpack_from("<BBI", payload, 30)
+    return dict(height_m=h / 10, vx=vgx / 10, vy=vgy / 10, vz=vgz / 10,
+                pitch=pitch / 10, roll=roll / 10, yaw=yaw / 10,
+                state=FLYC_STATES.get(state & 0x7F, hex(state & 0x7F)), flags=flags)

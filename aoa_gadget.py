@@ -69,30 +69,61 @@ def fmt(p):
 
 
 class VideoOut:
-    """Write the HEVC live view to a FIFO for a decoder, dropping data while no
-    reader is attached. A new reader is started on a frame boundary, preceded
-    by the latest VPS/SPS/PPS, so it decodes at once instead of waiting ~9 s
-    for the next parameter sets."""
+    """Write the live view (H.264 or H.265, whichever the drone sends) to a FIFO
+    for a decoder, dropping data while no reader is attached. A new reader is
+    started on a frame boundary, preceded by the latest parameter sets, so it
+    decodes at once instead of waiting up to ~9 s for the next ones. The codec
+    ("h264"/"h265") is written to <fifo>.codec for the reader's parser.
 
-    VPS = b"\x00\x00\x00\x01\x40\x01"
-    SLICE = b"\x00\x00\x00\x01\x02\x01"
+    The Mini 4K sent H.265 until it was paired with DJI Fly on iOS, then H.264."""
+
+    PARAM_SETS = (("h265", b"\x00\x00\x00\x01\x40\x01"),   # VPS
+                  ("h264", b"\x00\x00\x00\x01\x67"),        # SPS (nal_ref_idc 3)
+                  ("h264", b"\x00\x00\x00\x01\x27"))        # SPS (nal_ref_idc 1)
 
     def __init__(self, path):
         self.path = path
         self.fd = None
         self.params = b""
+        self.codec = None
         self.next_open = 0
         if path and not os.path.exists(path):
             os.mkfifo(path, 0o666)
         if path:
             os.chmod(path, 0o666)
+            if os.path.exists(path + ".codec"):
+                os.remove(path + ".codec")  # stale from an earlier session
+
+    def _find_params(self, chunk):
+        """Return the offset of a parameter-set run in chunk (caching it), or -1."""
+        for codec, sig in self.PARAM_SETS:
+            i = chunk.find(sig)
+            if i >= 0:
+                break
+        else:
+            return -1
+        j = i
+        while True:
+            k = chunk.find(b"\x00\x00\x01", j + 4)
+            if k < 0 or k + 3 >= len(chunk):
+                return -1  # the run continues into the next chunk; wait for the next one
+            nal = chunk[k + 3]
+            is_param = ((nal >> 1) & 0x3F) in (32, 33, 34) if codec == "h265" else (nal & 0x1F) in (7, 8)
+            if not is_param:
+                self.params = chunk[i:k - 1 if chunk[k - 1] == 0 else k]
+                break
+            j = k
+        if codec != self.codec:
+            self.codec = codec
+            log(f"live view is {codec}")
+            if self.path:
+                with open(self.path + ".codec", "w") as f:
+                    f.write(codec)
+                os.chmod(self.path + ".codec", 0o666)
+        return i
 
     def feed(self, chunk):
-        i = chunk.find(self.VPS)
-        if i >= 0:
-            k = chunk.find(self.SLICE, i)
-            if k > 0:
-                self.params = chunk[i:k]
+        i = self._find_params(chunk)
         if not self.path:
             return
         if self.fd is None:
@@ -322,11 +353,15 @@ class Gadget:
                     continue
                 if udp and p["src"] == 0x06 and p["set"] == 0x06 and p["id"] == 0x05:
                     st = duml.parse_sticks(p["payload"])
-                    st["t"] = t
+                    st.update(type="sticks", t=t)
                     udp.sendto(json.dumps(st).encode(), self.sticks_udp)
+                elif udp and p["set"] == 0x03 and p["id"] == 0x43 and len(p["payload"]) >= 36:
+                    osd = duml.parse_osd_general(p["payload"])
+                    osd.update(type="osd", t=t)
+                    udp.sendto(json.dumps(osd).encode(), self.sticks_udp)
                 key = (p["src"], p["dst"], p["set"], p["id"], p["type"] & 0x80)
                 is_new = key not in seen
-                if is_new or p["type"] & 0x80 or p["src"] not in (0x06, 0x0e):
+                if is_new or (p["type"] & 0x80 and p["src"] == 0x06):
                     seen.add(key)
                     log(f"RX {'new ' if is_new else ''}{fmt(p)}")
                 if self.ack and p["type"] & 0x60 and not p["type"] & 0x80:
@@ -401,7 +436,7 @@ def main():
     ap.add_argument("--rec-video", action="store_true",
                     help="also keep video blocks in rc_to_phone.rec (~25 MB/min)")
     ap.add_argument("--sticks-udp", metavar="HOST:PORT",
-                    help="send each RC stick report as JSON to this UDP address, e.g. 127.0.0.1:9870")
+                    help="send each RC stick report and FC status as JSON to this UDP address, e.g. 127.0.0.1:9870")
     ap.add_argument("--accessory", action="store_true",
                     help="enumerate directly as 18d1:2d00 (skip the handshake)")
     args = ap.parse_args()

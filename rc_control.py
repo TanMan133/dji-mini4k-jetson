@@ -28,19 +28,23 @@ def find_port():
 
 
 class StickReports:
-    """Latest RC stick report from the gadget's UDP stream (~9 Hz)."""
+    """Latest RC stick report (~9 Hz) and flight-controller status (~10 Hz) from the gadget's UDP stream."""
 
     def __init__(self, port=9870, host="127.0.0.1"):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((host, port))
         self.latest = None
         self.count = 0
+        self.osd = None  # latest FC status (duml.parse_osd_general + "t")
         self.cv = threading.Condition()
         threading.Thread(target=self._rx, daemon=True).start()
 
     def _rx(self):
         while True:
             msg = json.loads(self.sock.recv(4096))
+            if msg.get("type") == "osd":
+                self.osd = msg
+                continue
             with self.cv:
                 self.latest = msg
                 self.count += 1
