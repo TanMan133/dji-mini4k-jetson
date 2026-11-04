@@ -196,7 +196,7 @@ class Follower:
         # line-buffered: readers (the flight scripts' liveness checks) see each frame as it happens
         self.log = csv.writer(open(os.path.join(args.out, f"follow-{time.strftime('%H%M%S')}.csv"), "w", buffering=1))
         self.log.writerow(["t", "mode", "n_people", "cx", "cy", "h", "ex", "size", "roll", "pitch",
-                           "throttle", "yaw", "height_m", "fc_state", "fc_flags", "proc_ms", "hand_reason"])
+                           "throttle", "yaw", "height_m", "fc_state", "fc_flags", "proc_ms", "hand_reason", "battery"])
 
     def _read_cmds(self, fifo):
         while True:
@@ -302,6 +302,14 @@ class Follower:
 
     def follow_hand(self, o, person, w, h, height, half):
         if self.hand is None:
+            # Hand left the frame at a side (you outran the turn): keep turning that way for
+            # --edge-turn-s instead of stopping. Not when the hand was lowered on purpose.
+            if (self.hand_kept is not None and time.time() - self.hand_kept_t < self.a.edge_turn_s
+                    and not self.hand_reason.startswith("hand down")):
+                lex = (self.hand_kept[0] / w - 0.5) * 2
+                if abs(lex) > self.a.edge_zone:
+                    turn = min(self.a.yaw_max, self.a.k_yaw * abs(lex))
+                    o["yaw"] = STICK_CENTER + math.copysign(turn, lex) * half
             return o
         hx, hy = self.hand
         ex = (hx / w - 0.5) * 2
@@ -499,7 +507,8 @@ class Follower:
                                      else ("", "", "")),
                                    f"{self.ex_f:.3f}", size, *[round(self.out[k]) for k in ("roll", "pitch", "throttle", "yaw")],
                                    osd["height_m"] if osd else "", osd["state"] if osd else "", osd["flags"] if osd else "",
-                                   f"{proc_ms:.1f}", self.hand_reason if self.a.target == "hand" else ""])
+                                   f"{proc_ms:.1f}", self.hand_reason if self.a.target == "hand" else "",
+                                   self.reports.battery["percent"] if self.reports.battery else ""])
                 save = self.save_dir and now - self.last_save >= 1.0 / self.a.save_fps
                 if self.preview and (n % 2 == 0 or save):
                     snap = (list(people), box, osd, dict(self.out), self.hand, self.dist_now, self.mode, self.hand_reason)
@@ -568,7 +577,11 @@ def main():
     ap.add_argument("--dist-smooth", type=float, default=0.3, help="size-error low-pass factor per frame")
     ap.add_argument("--lost-s", type=float, default=0.5)
     # hand target
-    ap.add_argument("--dist-m", type=float, default=1.75, help="distance to keep, m (hand mode)")
+    ap.add_argument("--dist-m", type=float, default=1.17, help="distance to keep, m (hand mode)")
+    ap.add_argument("--edge-turn-s", type=float, default=1.0,
+                    help="hand mode: keep turning this long after the hand leaves the frame at a side")
+    ap.add_argument("--edge-zone", type=float, default=0.55,
+                    help="a hand lost further than this from centre (fraction of half-width) counts as a side exit")
     ap.add_argument("--arm-s", type=float, default=0.5, help="hand must be held up this long before it controls")
     ap.add_argument("--face-dist", type=float, default=0.35,
                     help="a wrist closer than this many shoulder widths to the nose is 'at the face' (drinking, phone)")
@@ -581,7 +594,7 @@ def main():
     ap.add_argument("--k-m", type=float, default=0.3, help="pitch fraction per metre of distance error")
     ap.add_argument("--dist-deadband-m", type=float, default=0.15)
     ap.add_argument("--k-alt", type=float, default=0.6, help="throttle fraction per unit of vertical error")
-    ap.add_argument("--thr-max", type=float, default=0.3, help="throttle cap, fraction of full deflection")
+    ap.add_argument("--thr-max", type=float, default=1.0, help="throttle cap, fraction of full deflection")
     ap.add_argument("--alt-deadband", type=float, default=0.1)
     ap.add_argument("--ceiling", type=float, default=2.5, help="no climbing above this reported height, m")
     ap.add_argument("--floor", type=float, default=0.3, help="no descending below this reported height, m")
