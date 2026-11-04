@@ -355,6 +355,10 @@ class Gadget:
                     st = duml.parse_sticks(p["payload"])
                     st.update(type="sticks", t=t)
                     udp.sendto(json.dumps(st).encode(), self.sticks_udp)
+                elif udp and p["src"] == 0x0b and p["set"] == 0x0d and p["id"] == 0x02 and len(p["payload"]) >= 23:
+                    bat = duml.parse_battery(p["payload"])
+                    bat.update(type="battery", t=t)
+                    udp.sendto(json.dumps(bat).encode(), self.sticks_udp)
                 elif udp and p["set"] == 0x03 and p["id"] == 0x43 and len(p["payload"]) >= 36:
                     osd = duml.parse_osd_general(p["payload"])
                     osd.update(type="osd", t=t)

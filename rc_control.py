@@ -36,6 +36,7 @@ class StickReports:
         self.latest = None
         self.count = 0
         self.osd = None  # latest FC status (duml.parse_osd_general + "t")
+        self.battery = None  # latest drone battery (duml.parse_battery + "t")
         self.cv = threading.Condition()
         threading.Thread(target=self._rx, daemon=True).start()
 
@@ -44,6 +45,9 @@ class StickReports:
             msg = json.loads(self.sock.recv(4096))
             if msg.get("type") == "osd":
                 self.osd = msg
+                continue
+            if msg.get("type") == "battery":
+                self.battery = msg
                 continue
             with self.cv:
                 self.latest = msg

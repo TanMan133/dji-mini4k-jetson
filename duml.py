@@ -144,3 +144,13 @@ def parse_osd_general(payload):
                 state=FLYC_STATES.get(state & 0x7F, hex(state & 0x7F)), flags=flags,
                 motors_on=bool(flags & 0x08), in_air=bool(flags & 0x04),
                 vision_positioning=bool(flags & 0x100))
+
+
+def parse_battery(payload):
+    """Decode a smart-battery dynamic data push (0x0b -> app, set 0d id 02, 138 B on the Mini 4K).
+
+    Layout after a 1-byte result (o-gs dji-dumlv1-proto.lua): pack mV, mA (signed),
+    full mAh, remaining mAh, temperature (0.1 degC), cell count, state of charge %."""
+    mv, ma, full, remain, temp, cells, soc = struct.unpack_from("<IiIIHBB", payload, 1)
+    return dict(voltage=mv / 1000, current=ma / 1000, full_mah=full, remain_mah=remain,
+                temp_c=temp / 10, percent=soc)

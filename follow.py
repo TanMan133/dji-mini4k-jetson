@@ -204,13 +204,21 @@ class Follower:
             self.ex_f += self.a.smooth * (ex - self.ex_f)
             e = 0.0 if abs(self.ex_f) < self.a.deadband else self.ex_f
             o["yaw"] = STICK_CENTER + max(-self.a.yaw_max, min(self.a.yaw_max, self.a.k_yaw * e)) * half
-            if self.a.distance:
+            if self.a.distance and self.size_goal != "off":
                 size = (box[3] - box[1]) / h
+                clipped = box[1] <= 0.02 * h or box[3] >= 0.98 * h  # head or feet out of frame
                 if self.size_goal is None:
+                    if size > self.a.max_start_size or clipped:
+                        print(f"{time.strftime('%H:%M:%S')} target fills {size:.2f} of the frame height"
+                              f"{' and is cut off' if clipped else ''}: too close for distance hold, yaw only", flush=True)
+                        self.size_goal = "off"
+                        return o
                     self.size_goal = size
-                de = self.size_goal - size               # >0: target smaller (farther) -> forward
-                de = 0.0 if abs(de) < self.a.size_deadband else de
-                o["pitch"] = STICK_CENTER + max(-self.a.pitch_max, min(self.a.pitch_max, self.a.k_dist * de)) * half
+                    print(f"{time.strftime('%H:%M:%S')} distance hold: keeping size {size:.2f}", flush=True)
+                if not clipped:  # a clipped box says nothing about distance: hold
+                    de = self.size_goal - size           # >0: target smaller (farther) -> forward
+                    de = 0.0 if abs(de) < self.a.size_deadband else de
+                    o["pitch"] = STICK_CENTER + max(-self.a.pitch_max, min(self.a.pitch_max, self.a.k_dist * de)) * half
         return o
 
     def run(self):
@@ -291,6 +299,7 @@ class Follower:
         cv2.line(frame, (w // 2, 0), (w // 2, h), (255, 255, 255), 1)
         txt = (f"{self.mode.upper()}{'  MOTORS' if osd and osd.get('motors_on') else ''}  yaw {self.out['yaw']:.0f} pitch {self.out['pitch']:.0f} "
                f"thr {self.out['throttle']:.0f}  h {osd['height_m'] if osd else '?'} m  {osd['state'] if osd else ''}"
+               + (f"  bat {self.reports.battery['percent']}%" if self.reports.battery else "")
                + ("  DRY" if self.a.dry else ""))
         cv2.rectangle(frame, (0, 0), (w, 34), (0, 0, 0), -1)
         cv2.putText(frame, txt, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
@@ -313,6 +322,8 @@ def main():
     ap.add_argument("--k-dist", type=float, default=1.5)
     ap.add_argument("--pitch-max", type=float, default=0.2)
     ap.add_argument("--size-deadband", type=float, default=0.04)
+    ap.add_argument("--max-start-size", type=float, default=0.8,
+                    help="no distance hold if the target is taller than this fraction of the frame at follow start")
     ap.add_argument("--lost-s", type=float, default=0.5)
     ap.add_argument("--takeoff-height", type=float, default=1.0, help="m")
     ap.add_argument("--takeoff-throttle", type=float, default=0.5, help="fraction of full up")
