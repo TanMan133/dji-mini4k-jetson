@@ -37,6 +37,7 @@ class StickReports:
         self.count = 0
         self.osd = None  # latest FC status (duml.parse_osd_general + "t")
         self.battery = None  # latest drone battery (duml.parse_battery + "t")
+        self.gimbal = None   # latest gimbal attitude: pitch/roll/yaw in degrees + "t"
         self.cv = threading.Condition()
         threading.Thread(target=self._rx, daemon=True).start()
 
@@ -48,6 +49,9 @@ class StickReports:
                 continue
             if msg.get("type") == "battery":
                 self.battery = msg
+                continue
+            if msg.get("type") == "gimbal":
+                self.gimbal = msg
                 continue
             with self.cv:
                 self.latest = msg

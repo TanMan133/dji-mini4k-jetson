@@ -16,6 +16,9 @@ Modes (change with commands written to <out>/follow.fifo, one per line):
   land     throttle held down until the drone is down and the motors stop
   start    motors-start stick gesture for 2 s, then hover (props-off test, takeoff)
   takeoff  start, then throttle up to --takeoff-height, then hover
+  level    roll the camera wheel until the gimbal reads level (0 deg), then back to the
+           previous mode (needs the gimbal angle on --sticks-udp)
+  distcal  you stand at --dist-m now: rescale the shoulder-width distance estimate to match
   release  undo an ESP32 hold/land latch (SW1/SW2) so this program drives again
   quit
 The ESP32's SW1 button latches all sticks to centre whatever this program sends.
@@ -51,7 +54,7 @@ from detector import PersonDetector
 from live_view import WARMUP_FRAMES, open_capture
 from rc_control import STICK_CENTER, STICK_MAX, STICK_MIN, Esp, Sticks, StickReports
 
-MODES = ("idle", "hover", "follow", "land", "start", "takeoff")
+MODES = ("idle", "hover", "follow", "land", "start", "takeoff", "level")
 VIDEO_ENDED = 3  # exit code: restart me (run_follow.sh does)
 
 
@@ -156,6 +159,7 @@ class Follower:
         self.sticks = None if args.dry else Sticks(Esp(), args.cal)
         self.det = PersonDetector(args.engine, conf=args.conf)
         self.mode = "idle"
+        self.level_return = "idle"
         self.exit_code = 0
         self.mode_t = time.time()
         self.cmds = queue.Queue()
@@ -169,7 +173,7 @@ class Follower:
         self.hand = None            # (x, y) of the raised hand being followed
         self.dist_now = None        # estimated distance to the person, m (hand mode)
         self.lead_state = {}
-        self.out = dict(roll=STICK_CENTER, pitch=STICK_CENTER, throttle=STICK_CENTER, yaw=STICK_CENTER)
+        self.out = dict(roll=STICK_CENTER, pitch=STICK_CENTER, throttle=STICK_CENTER, yaw=STICK_CENTER, wheel=STICK_CENTER)
         self.preview = Preview(args.port, self.cmds) if args.port else None
         fifo = os.path.join(args.out, "follow.fifo")
         if not os.path.exists(fifo):
@@ -188,6 +192,8 @@ class Follower:
                         self.cmds.put(line.strip().lower())
 
     def set_mode(self, mode):
+        if mode == "level":
+            self.level_return = self.mode if self.mode != "level" else "idle"
         if mode != self.mode:
             print(f"{time.strftime('%H:%M:%S')} mode {self.mode} -> {mode}", flush=True)
         self.mode, self.mode_t = mode, time.time()
@@ -268,12 +274,24 @@ class Follower:
         return o
 
     def control(self, box, w, h, now):
-        o = dict(roll=STICK_CENTER, pitch=STICK_CENTER, throttle=STICK_CENTER, yaw=STICK_CENTER)
+        o = dict(roll=STICK_CENTER, pitch=STICK_CENTER, throttle=STICK_CENTER, yaw=STICK_CENTER, wheel=STICK_CENTER)
         half = (STICK_MAX - STICK_MIN) / 2
         osd = self.reports.osd
         height = osd["height_m"] if osd else None
         t_mode = now - self.mode_t
 
+        if self.mode == "level":
+            # wheel up raises the camera (Mini 4K: ~29 deg/s at full wheel); stop within 1.5 deg of level
+            g = self.reports.gimbal
+            if g is None or now - g["t"] > 1.0 or t_mode > 8.0:
+                print(f"{time.strftime('%H:%M:%S')} level: {'no gimbal angle' if g is None or now - g['t'] > 1.0 else 'timed out'}", flush=True)
+                self.set_mode(self.level_return)
+            elif abs(g["pitch"]) < 1.5:
+                print(f"{time.strftime('%H:%M:%S')} level: gimbal at {g['pitch']:.1f} deg", flush=True)
+                self.set_mode(self.level_return)
+            else:
+                o["wheel"] = STICK_CENTER + max(-1.0, min(1.0, -0.05 * g["pitch"])) * half
+            return o
         if self.mode in ("start", "takeoff") and t_mode < 2.0:
             # motors-start gesture: both sticks down and outward
             o.update(throttle=STICK_MIN, yaw=STICK_MIN, pitch=STICK_MIN, roll=STICK_MAX)
@@ -353,6 +371,14 @@ class Follower:
                     c = self.cmds.get()
                     if c == "quit":
                         return
+                    if c == "distcal":  # you are standing at --dist-m right now: rescale the estimate to match
+                        if self.dist_now:
+                            self.a.shoulder_m *= self.a.dist_m / self.dist_now
+                            print(f"{time.strftime('%H:%M:%S')} distcal: read {self.dist_now:.2f} m at a true {self.a.dist_m} m"
+                                  f" -> shoulder width {self.a.shoulder_m:.3f} m", flush=True)
+                        else:
+                            print("distcal: no distance estimate right now (shoulders and a raised hand must be visible)", flush=True)
+                        continue
                     if c == "release":  # undo an ESP32 SW1/SW2/H/G latch
                         print(self.sticks.esp.resume() if self.sticks else "dry: no ESP32", flush=True)
                         continue
