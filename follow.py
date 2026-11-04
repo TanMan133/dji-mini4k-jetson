@@ -9,8 +9,9 @@ Modes (change with commands written to <out>/follow.fifo, one per line):
   hover    all sticks centre
   follow   yaw keeps the target centred; with --distance, pitch keeps its size.
            With --target hand (pose engine): yaw looks at your raised hand, throttle
-           keeps the drone level with it, pitch keeps --dist-m from your shoulders
-           (+ --reach-m); lower your hand below your elbow and the drone holds.
+           keeps the midpoint of hand and shoulders centred (your arm stays in view),
+           pitch keeps --dist-m from your shoulders (+ --reach-m); lower your hand
+           (wrist below elbow, or a fast drop) and the drone holds.
            While the target is out of view the sticks centre (the drone holds) and
            following resumes when it is seen again.
   land     throttle held down until the drone is down and the motors stop
@@ -180,6 +181,8 @@ class Follower:
         self.lead_state = {}
         self.raised_since = None    # when the current raised hand was first seen
         self.hand_kept, self.hand_kept_t = None, 0.0  # last controlling hand (lenient tracking)
+        self.hand_hist = []         # recent (t, y) of the controlling hand, for the drop-to-release gesture
+        self.released_t = 0.0       # last release by dropping the hand
         self.hand_reason = ""
         self.frame_w, self.frame_h = 640, 360
         self.out = dict(roll=STICK_CENTER, pitch=STICK_CENTER, throttle=STICK_CENTER, yaw=STICK_CENTER, wheel=STICK_CENTER)
@@ -305,7 +308,7 @@ class Follower:
             # Hand left the frame at a side (you outran the turn): keep turning that way for
             # --edge-turn-s instead of stopping. Not when the hand was lowered on purpose.
             if (self.hand_kept is not None and time.time() - self.hand_kept_t < self.a.edge_turn_s
-                    and not self.hand_reason.startswith("hand down")):
+                    and not self.hand_reason.startswith(("hand down", "released"))):
                 lex = (self.hand_kept[0] / w - 0.5) * 2
                 if abs(lex) > self.a.edge_zone:
                     turn = min(self.a.yaw_max, self.a.k_yaw * abs(lex))
@@ -317,11 +320,21 @@ class Follower:
         ex_l = self.lead("x", self.ex_f, time.time())
         e = 0.0 if abs(ex_l) < self.a.deadband else ex_l
         o["yaw"] = STICK_CENTER + max(-self.a.yaw_max, min(self.a.yaw_max, self.a.k_yaw * e)) * half
-        ey = (hy / h - 0.5) * 2                        # >0: hand below centre -> descend
+        # Height: aim at the midpoint of hand and shoulders, not the hand, so elbow and shoulders
+        # stay in view (up close, centring a raised hand pushed the body out of the bottom of the
+        # frame: control was lost and a lowered arm couldn't be seen as lowered). Without shoulders
+        # in view, never climb (that is what lost them); descend if the hand is in the lower part.
+        k = person[5] if len(person) > 5 else None
+        shoulders = k is not None and k[5, 2] >= 0.4 and k[6, 2] >= 0.4
+        target_y = (hy + (k[5, 1] + k[6, 1]) / 2) / 2 if shoulders else hy
+        centre_y = 0.5 if shoulders else self.a.hand_y_alone
+        ey = (target_y / h - centre_y) * 2              # >0: target below its aim point -> descend
         self.ey_f += self.a.smooth * (ey - self.ey_f)
         ey_l = self.lead("y", self.ey_f, time.time())
         e = 0.0 if abs(ey_l) < self.a.alt_deadband else ey_l
         climb = max(-self.a.thr_max, min(self.a.thr_max, -self.a.k_alt * e))
+        if not shoulders:
+            climb = min(climb, 0.0)
         if height is not None and ((climb > 0 and height > self.a.ceiling) or (climb < 0 and height < self.a.floor)):
             climb = 0.0
         o["throttle"] = STICK_CENTER + climb * half
@@ -459,15 +472,28 @@ class Follower:
                     self.frame_w, self.frame_h = w, h
                     keeping = self.hand_kept is not None and now - self.hand_kept_t < self.a.lost_s
                     hand, self.hand_reason = self.hand_of(box, self.hand_kept if keeping else None)
-                    if keeping:
+                    if keeping and hand is not None:
+                        # a fast drop is "let go", not "go down": release before the drone follows it
+                        self.hand_hist = [(t, y) for t, y in self.hand_hist if now - t < 0.25] + [(now, hand[1])]
+                        t0_, y0_ = self.hand_hist[0]
+                        drop_rate = (hand[1] - y0_) / h / (now - t0_) if now - t0_ > 0.08 else 0.0
+                        if drop_rate > self.a.drop_rate:
+                            hand, self.hand_reason = None, f"released: hand dropped ({drop_rate:.1f} frames/s)"
+                            self.hand_kept, self.released_t, self.hand_hist = None, now, []
+                            print(f"{time.strftime('%H:%M:%S')} {self.hand_reason}", flush=True)
                         self.hand = hand
+                    elif keeping:
+                        self.hand = None
                     else:
+                        self.hand_hist = []
                         if hand is None:
                             self.raised_since = None
                         elif self.raised_since is None:
                             self.raised_since = now
                         # a hand takes control only after being held up for --arm-s (a passing pose doesn't)
-                        armed = hand is not None and now - self.raised_since >= self.a.arm_s
+                        # just after a release, taking control again needs a longer, deliberate hold
+                        arm_s = self.a.rearm_s if now - self.released_t < 5.0 else self.a.arm_s
+                        armed = hand is not None and now - self.raised_since >= arm_s
                         self.hand = hand if armed else None
                         if hand is not None and not armed:
                             self.hand_reason = f"raised, arming {now - self.raised_since:.1f}s"
@@ -583,6 +609,9 @@ def main():
     ap.add_argument("--edge-zone", type=float, default=0.55,
                     help="a hand lost further than this from centre (fraction of half-width) counts as a side exit")
     ap.add_argument("--arm-s", type=float, default=0.5, help="hand must be held up this long before it controls")
+    ap.add_argument("--rearm-s", type=float, default=1.0, help="... and this long within 5 s of a release")
+    ap.add_argument("--drop-rate", type=float, default=0.8,
+                    help="hand moving down faster than this (frame heights/s) releases control instead of descending")
     ap.add_argument("--face-dist", type=float, default=0.35,
                     help="a wrist closer than this many shoulder widths to the nose is 'at the face' (drinking, phone)")
     ap.add_argument("--min-facing", type=float, default=0.15,
@@ -596,6 +625,8 @@ def main():
     ap.add_argument("--k-alt", type=float, default=0.6, help="throttle fraction per unit of vertical error")
     ap.add_argument("--thr-max", type=float, default=1.0, help="throttle cap, fraction of full deflection")
     ap.add_argument("--alt-deadband", type=float, default=0.1)
+    ap.add_argument("--hand-y-alone", type=float, default=0.33,
+                    help="with no shoulders in view, aim the hand at this fraction of the frame height")
     ap.add_argument("--ceiling", type=float, default=2.5, help="no climbing above this reported height, m")
     ap.add_argument("--floor", type=float, default=0.3, help="no descending below this reported height, m")
     ap.add_argument("--takeoff-height", type=float, default=1.0, help="m")
