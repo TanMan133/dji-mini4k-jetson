@@ -132,10 +132,13 @@ def parse_osd_general(payload):
     """Decode a set 03 id 43 payload (55 B on the Mini 4K, relayed by the ground radio 0x0e).
 
     height/velocity/attitude match the o-gs layout and read sensibly on the ground.
-    The flag word does NOT match it on this drone (0x00805000 when parked, motors off);
-    its motor/in-air bits are still to be identified, so it is returned raw."""
+    Flag word on the Mini 4K (props-off test 2026-11-03): 0x00805000 parked;
+    +0x08 (motors on) and +0x02 within 1 s of the start gesture, +0x10 while
+    idling/stopping; back to 0x00805000 after ~2 s of throttle down.
+    State goes GPS_Atti -> EngineStart -> AssistedTakeoff -> Atti -> GPS_Atti."""
     lon, lat, h, vgx, vgy, vgz, pitch, roll, yaw = struct.unpack_from("<2d7h", payload)
     state, _cmd, flags = struct.unpack_from("<BBI", payload, 30)
     return dict(height_m=h / 10, vx=vgx / 10, vy=vgy / 10, vz=vgz / 10,
                 pitch=pitch / 10, roll=roll / 10, yaw=yaw / 10,
-                state=FLYC_STATES.get(state & 0x7F, hex(state & 0x7F)), flags=flags)
+                state=FLYC_STATES.get(state & 0x7F, hex(state & 0x7F)), flags=flags,
+                motors_on=bool(flags & 0x08))

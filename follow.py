@@ -148,8 +148,11 @@ class Follower:
                 self.set_mode("hover")
         elif self.mode == "land":
             # gentle descent, full down near the floor so the drone lands and stops its motors
-            gentle = height is not None and height > 0.5
-            o["throttle"] = STICK_CENTER - 0.5 * half if gentle else STICK_MIN
+            if osd and not osd.get("motors_on", True) and t_mode > 1.0:
+                self.set_mode("idle")  # down and stopped
+            else:
+                gentle = height is not None and height > 0.5
+                o["throttle"] = STICK_CENTER - 0.5 * half if gentle else STICK_MIN
         elif self.mode == "follow" and box is not None:
             cx = (box[0] + box[2]) / 2
             ex = (cx / w - 0.5) * 2                     # -1 (left edge) .. +1 (right edge)
@@ -235,7 +238,7 @@ class Follower:
             cv2.rectangle(frame, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), col, 2)
         h, w = frame.shape[:2]
         cv2.line(frame, (w // 2, 0), (w // 2, h), (255, 255, 255), 1)
-        txt = (f"{self.mode.upper()}  yaw {self.out['yaw']:.0f} pitch {self.out['pitch']:.0f} "
+        txt = (f"{self.mode.upper()}{'  MOTORS' if osd and osd.get('motors_on') else ''}  yaw {self.out['yaw']:.0f} pitch {self.out['pitch']:.0f} "
                f"thr {self.out['throttle']:.0f}  h {osd['height_m'] if osd else '?'} m  {osd['state'] if osd else ''}"
                + ("  DRY" if self.a.dry else ""))
         cv2.rectangle(frame, (0, 0), (w, 34), (0, 0, 0), -1)
