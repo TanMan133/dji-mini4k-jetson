@@ -134,11 +134,13 @@ def parse_osd_general(payload):
     height/velocity/attitude match the o-gs layout and read sensibly on the ground.
     Flag word on the Mini 4K (props-off test 2026-11-03): 0x00805000 parked;
     +0x08 (motors on) and +0x02 within 1 s of the start gesture, +0x10 while
-    idling/stopping; back to 0x00805000 after ~2 s of throttle down.
+    idling/stopping; back to 0x00805000 after ~2 s of throttle down. In flight
+    (2026-11-03) +0x04 (in air) and +0x100 (vision positioning in use), as in o-gs.
     State goes GPS_Atti -> EngineStart -> AssistedTakeoff -> Atti -> GPS_Atti."""
     lon, lat, h, vgx, vgy, vgz, pitch, roll, yaw = struct.unpack_from("<2d7h", payload)
     state, _cmd, flags = struct.unpack_from("<BBI", payload, 30)
     return dict(height_m=h / 10, vx=vgx / 10, vy=vgy / 10, vz=vgz / 10,
                 pitch=pitch / 10, roll=roll / 10, yaw=yaw / 10,
                 state=FLYC_STATES.get(state & 0x7F, hex(state & 0x7F)), flags=flags,
-                motors_on=bool(flags & 0x08))
+                motors_on=bool(flags & 0x08), in_air=bool(flags & 0x04),
+                vision_positioning=bool(flags & 0x100))
