@@ -105,6 +105,14 @@ class Esp:
     def set_neutral(self, duties):
         return self._cmd("N " + " ".join(str(int(round(d))) for d in duties))
 
+    def set_landing(self, duties):
+        """Store the duties SW2 / land_now() latch: throttle full down, everything else centred."""
+        return self._cmd("L " + " ".join(str(int(round(d))) for d in duties))
+
+    def land_now(self):
+        """Latch landing in the ESP32 itself; Jetson commands are ignored until resume()."""
+        return self._cmd("G")
+
     def hold(self):
         return self._cmd("H")
 
@@ -129,6 +137,9 @@ class Sticks:
         cal = json.load(open(cal_path))
         self.cal = cal["outputs"]  # list in ESP output order
         self.by_name = {c["report_channel"]: i for i, c in enumerate(self.cal) if c.get("report_channel")}
+        # Flashing wipes the ESP32's stored values, so push them on every connect.
+        esp.set_neutral(self.duties())
+        esp.set_landing(self.duties(throttle=STICK_MIN))
 
     def duty_for(self, i, value):
         c = self.cal[i]
@@ -143,13 +154,13 @@ class Sticks:
         v0, v1, d0, d1 = vals[k - 1], vals[k], duts[k - 1], duts[k]
         return d0 + (d1 - d0) * (value - v0) / (v1 - v0) if v1 != v0 else d0
 
+    def duties(self, **values):
+        """Duties in ESP32 output order for stick values in 364..1684; unnamed channels centre."""
+        return [self.duty_for(i, values.get(c.get("report_channel"), STICK_CENTER)) for i, c in enumerate(self.cal)]
+
     def set(self, **values):
         """set(roll=1200, throttle=1024, ...) in 364..1684; unnamed channels centre."""
-        duties = []
-        for i, c in enumerate(self.cal):
-            name = c.get("report_channel")
-            duties.append(self.duty_for(i, values.get(name, STICK_CENTER)))
-        self.esp.set_duty(duties)
+        self.esp.set_duty(self.duties(**values))
 
     def set_normalized(self, **values):
         """set_normalized(roll=0.2, throttle=-1.0, ...) in -1..1."""

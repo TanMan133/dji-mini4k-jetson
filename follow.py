@@ -13,6 +13,7 @@ Modes (change with commands written to <out>/follow.fifo, one per line):
   land     throttle held down until the drone is down and the motors stop
   start    motors-start stick gesture for 2 s, then hover (props-off test, takeoff)
   takeoff  start, then throttle up to --takeoff-height, then hover
+  release  undo an ESP32 hold/land latch (SW1/SW2) so this program drives again
   quit
 The ESP32's SW1 button latches all sticks to centre whatever this program sends.
 
@@ -26,7 +27,9 @@ centres the sticks within 300 ms.
        --sticks-udp 127.0.0.1:9870 --seconds 3600 --out capture/live &
   .venv/bin/python follow.py --out capture/live            # add --dry to not send sticks
   echo follow > capture/live/follow.fifo
-Preview: http://<jetson>:8090/
+Control page (preview + Land/Hover/Follow/Take off): http://<jetson>:8090/
+ESP32 buttons, independent of this program: SW1 = hold (sticks centred),
+SW2 = land (throttle down until stopped); both latch until released with R.
 """
 import argparse
 import csv
@@ -46,10 +49,30 @@ from rc_control import STICK_CENTER, STICK_MAX, STICK_MIN, Esp, Sticks, StickRep
 MODES = ("idle", "hover", "follow", "land", "start", "takeoff")
 
 
-class Preview:
-    """Latest annotated frame as MJPEG over HTTP."""
+CONTROL_PAGE = b"""<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mini 4K follow</title><style>
+body{margin:0;background:#111;color:#eee;font:16px system-ui;display:flex;flex-direction:column;align-items:center}
+img{width:100%;max-width:960px}
+.b{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;width:100%;max-width:960px;padding:12px;box-sizing:border-box}
+button{font:700 20px system-ui;padding:22px 0;border:0;border-radius:10px;color:#fff;background:#2d4f6b}
+#land{background:#b3261e}#hover{background:#8a6d1a}
+#msg{min-height:1.4em;padding:0 12px}
+</style></head><body>
+<img src="/stream" alt="drone camera with detections">
+<div class="b"><button id="land">LAND</button><button id="hover">HOVER</button>
+<button id="follow">FOLLOW</button><button id="takeoff">TAKE OFF</button></div>
+<div id="msg"></div>
+<script>
+for (const b of document.querySelectorAll("button")) b.onclick = () =>
+  fetch("/cmd?c=" + b.id).then(r => r.text()).then(t => document.getElementById("msg").textContent = t)
+    .catch(e => document.getElementById("msg").textContent = "not sent: " + e);
+</script></body></html>"""
 
-    def __init__(self, port):
+
+class Preview:
+    """Annotated frames as MJPEG (/stream) and a control page (/) with Land/Hover/Follow/Take off."""
+
+    def __init__(self, port, commands):
         self.jpeg = None
         self.cv = threading.Condition()
         preview = self
@@ -58,7 +81,26 @@ class Preview:
             def log_message(self, *a):
                 pass
 
+            def _send(self, body, ctype="text/plain"):
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
             def do_GET(self):
+                if self.path.startswith("/cmd?c="):
+                    c = self.path.split("=", 1)[1]
+                    if c in ("land", "hover", "follow", "takeoff"):
+                        commands.put(c)
+                        print(f"{time.strftime('%H:%M:%S')} web: {c}", flush=True)
+                        self._send(f"sent {c}".encode())
+                    else:
+                        self._send(b"unknown command")
+                    return
+                if self.path != "/stream":
+                    self._send(CONTROL_PAGE, "text/html")
+                    return
                 self.send_response(200)
                 self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=f")
                 self.end_headers()
@@ -99,7 +141,7 @@ class Follower:
         self.ex_f = 0.0             # filtered horizontal error
         self.lost = False
         self.out = dict(roll=STICK_CENTER, pitch=STICK_CENTER, throttle=STICK_CENTER, yaw=STICK_CENTER)
-        self.preview = Preview(args.port) if args.port else None
+        self.preview = Preview(args.port, self.cmds) if args.port else None
         fifo = os.path.join(args.out, "follow.fifo")
         if not os.path.exists(fifo):
             os.mkfifo(fifo)
@@ -191,6 +233,9 @@ class Follower:
                     c = self.cmds.get()
                     if c == "quit":
                         return
+                    if c == "release":  # undo an ESP32 SW1/SW2/H/G latch
+                        print(self.sticks.esp.resume() if self.sticks else "dry: no ESP32", flush=True)
+                        continue
                     osd = self.reports.osd
                     if c in ("start", "takeoff") and (osd is None or osd["height_m"] > 0.3):
                         # the start gesture in the air is DJI's emergency motor stop
