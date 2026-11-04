@@ -7,7 +7,9 @@ detector -> controller -> rc_control.Sticks -> ESP32 -> RC stick lines.
 Modes (change with commands written to <out>/follow.fifo, one per line):
   idle     sticks not sent (ESP32 holds centre)       [start-up mode]
   hover    all sticks centre
-  follow   yaw keeps the target centred; with --distance, pitch keeps its size
+  follow   yaw keeps the target centred; with --distance, pitch keeps its size.
+           While the target is out of view the sticks centre (the drone holds) and
+           following resumes when it is seen again.
   land     throttle held down until the drone is down and the motors stop
   start    motors-start stick gesture for 2 s, then hover (props-off test, takeoff)
   takeoff  start, then throttle up to --takeoff-height, then hover
@@ -16,8 +18,8 @@ The ESP32's SW1 button latches all sticks to centre whatever this program sends.
 
 Safety: follow only ever moves yaw (and pitch with --distance), capped at
 --yaw-max/--pitch-max; throttle and roll stay centred, so follow can never form
-the motor-start/stop gesture. Lost target >0.5 s, a stalled video >0.3 s or
-stale FC status while airborne -> hover. Exiting stops the ESP32 stream and it
+the motor-start/stop gesture. Target lost >0.5 s -> sticks centred until it is
+back; a stalled video >0.3 s or stale FC status -> hover. Exiting stops the ESP32 stream and it
 centres the sticks within 300 ms.
 
   sudo .venv/bin/python aoa_gadget.py --ack --video capture/live/video.fifo \\
@@ -95,6 +97,7 @@ class Follower:
         self.target_t = 0.0
         self.size_goal = None       # box height / frame height to hold (--distance)
         self.ex_f = 0.0             # filtered horizontal error
+        self.lost = False
         self.out = dict(roll=STICK_CENTER, pitch=STICK_CENTER, throttle=STICK_CENTER, yaw=STICK_CENTER)
         self.preview = Preview(args.port) if args.port else None
         fifo = os.path.join(args.out, "follow.fifo")
@@ -206,12 +209,15 @@ class Follower:
 
                 osd = self.reports.osd
                 if self.mode == "follow":
-                    lost = now - self.target_t > self.a.lost_s
                     fc_stale = osd is None or now - osd["t"] > 1.0
-                    if lost or stalled or fc_stale:
-                        why = "target lost" if lost else ("video stalled" if stalled else "FC status stale")
-                        print(f"{time.strftime('%H:%M:%S')} {why} -> hover", flush=True)
+                    if stalled or fc_stale:
+                        print(f"{time.strftime('%H:%M:%S')} {'video stalled' if stalled else 'FC status stale'} -> hover", flush=True)
                         self.set_mode("hover")
+                    else:
+                        lost = now - self.target_t > self.a.lost_s
+                        if lost != self.lost:  # sticks centre (drone holds) while lost, resume on reacquire
+                            print(f"{time.strftime('%H:%M:%S')} target {'lost: holding' if lost else 'reacquired'}", flush=True)
+                            self.lost = lost
                 self.out = self.control(box if box is not None and now - self.target_t < 0.2 else None, w, h, now)
 
                 if self.sticks and self.mode != "idle":
