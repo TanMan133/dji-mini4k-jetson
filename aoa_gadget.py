@@ -18,6 +18,7 @@ import os
 import queue
 import select
 import signal
+import socket
 import struct
 import subprocess
 import sys
@@ -145,6 +146,7 @@ class Gadget:
         self.ack = False
         self.video_path = None
         self.rec_video = False
+        self.sticks_udp = None  # (host, port) for stick-report JSON
         self.txrec = open(os.path.join(out_dir, "phone_to_rc.rec"), "wb", buffering=0)
         self.raw = open(os.path.join(out_dir, "rc_to_phone.bin"), "wb", buffering=0)
         self.rec = open(os.path.join(out_dir, "rc_to_phone.rec"), "wb", buffering=0)  # <d t><I len><data>
@@ -293,6 +295,7 @@ class Gadget:
         threading.Thread(target=self.tx_loop, args=(txq,), daemon=True).start()
         threading.Thread(target=self.cmd_loop, args=(txq,), daemon=True).start()
         video = VideoOut(self.video_path)
+        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) if self.sticks_udp else None
         seen = set()
         total, reads, last, t_last = 0, 0, 0, time.time()
         while True:
@@ -317,6 +320,10 @@ class Gadget:
                 if not p:
                     log(f"RX non-DUML {len(f)} B: {f[:48].hex(' ')}")
                     continue
+                if udp and p["src"] == 0x06 and p["set"] == 0x06 and p["id"] == 0x05:
+                    st = duml.parse_sticks(p["payload"])
+                    st["t"] = t
+                    udp.sendto(json.dumps(st).encode(), self.sticks_udp)
                 key = (p["src"], p["dst"], p["set"], p["id"], p["type"] & 0x80)
                 is_new = key not in seen
                 if is_new or p["type"] & 0x80 or p["src"] not in (0x06, 0x0e):
@@ -393,6 +400,8 @@ def main():
     ap.add_argument("--video", metavar="FIFO", help="write the HEVC live view to this named pipe")
     ap.add_argument("--rec-video", action="store_true",
                     help="also keep video blocks in rc_to_phone.rec (~25 MB/min)")
+    ap.add_argument("--sticks-udp", metavar="HOST:PORT",
+                    help="send each RC stick report as JSON to this UDP address, e.g. 127.0.0.1:9870")
     ap.add_argument("--accessory", action="store_true",
                     help="enumerate directly as 18d1:2d00 (skip the handshake)")
     args = ap.parse_args()
@@ -404,6 +413,9 @@ def main():
     g.ack = args.ack
     g.video_path = args.video
     g.rec_video = args.rec_video
+    if args.sticks_udp:
+        host, port = args.sticks_udp.rsplit(":", 1)
+        g.sticks_udp = (host, int(port))
     signal.signal(signal.SIGTERM, lambda *_: g.stop.set())
     signal.signal(signal.SIGINT, lambda *_: g.stop.set())
     try:

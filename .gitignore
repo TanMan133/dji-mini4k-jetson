@@ -2,3 +2,5 @@ capture/
 __pycache__/
 *.pyc
 *.fifo
+.pio/
+calibration/
