@@ -1,0 +1,6 @@
+# Runtime, in a venv made with --system-site-packages (see docs/BUILD_NOTES.md).
+# Also needed from the system (JetPack / apt), not pip: OpenCV with GStreamer,
+# TensorRT Python bindings, PyGObject (python3-gi), GStreamer + NVIDIA's nvv4l2decoder.
+cuda-python==13.3.1   # match the installed CUDA major version
+numpy
+pyserial

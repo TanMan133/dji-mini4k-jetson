@@ -60,6 +60,9 @@ drone ──O2 radio──► RC-N1C ──USB (AOA)──► Jetson USB-C  aoa_
 
 ## Hardware
 
+Build details (RC internals, versions tested, ESP32 notes, first-run order, quirks):
+[docs/BUILD_NOTES.md](docs/BUILD_NOTES.md).
+
 - DJI Mini 4K with RC-N1C (other O2 drones with the RC-N1 likely work; not tested)
 - Jetson Orin Nano (JetPack with TensorRT; its USB-C port in device mode)
 - ESP32-S3 (an ESP32-S3-MINI-1 board was used; 4 MB flash)
@@ -90,7 +93,7 @@ sticks back whenever the toggle is off or the ESP32 is unpowered.
 
 ```
 python3 -m venv --system-site-packages .venv          # system OpenCV (GStreamer) + TensorRT
-.venv/bin/pip install cuda-python==13.3.1             # match your CUDA
+.venv/bin/pip install -r requirements.txt
 ```
 
 Models (not included; Ultralytics YOLO11, AGPL-3.0), built into TensorRT engines on the Jetson:
@@ -120,9 +123,12 @@ sudo python3 aoa_gadget.py --ack --video capture/live/video.fifo --sticks-udp 12
 .venv/bin/python tools/smoke_sticks.py      # each output moves one stick
 .venv/bin/python calibrate_sticks.py        # writes calibration/sticks.json
 
-# fly (restarts itself if the drone switches video codec)
+# follow program (restarts itself if the drone switches video codec)
 ./run_follow.sh --out capture/live                       # person follow (add --distance)
 ./run_follow.sh --out capture/live --target hand         # hand control
+
+# fly a session: checks follow.py is live, takes off, follows, lands on SW2 / LAND / low battery
+python3 tools/fly.py --out capture/live --follow-s 0
 ```
 
 Commands go to `capture/live/follow.fifo` (one per line) or to the control page at
@@ -150,6 +156,7 @@ used) and saves annotated frames at 10 fps (`--save-fps`) next to it; `aoa_gadge
 | `follow.py`, `run_follow.sh` | person / hand follow, take-off and landing, control page |
 | `calibrate_sticks.py` | PWM duty ↔ RC stick value tables |
 | `firmware/esp32_sticks` | ESP32-S3 stick driver |
+| `tools/fly.py` | one flight: liveness and battery checks, take-off, follow, landing |
 | `tools/` | stick mapping, smoke test, DUML stats, video latency and replay |
 | `samples/` | a 9 s live-view clip, decoded frames, the AOA handshake |
 
