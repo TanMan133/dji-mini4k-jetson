@@ -1,0 +1,224 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 650" role="img" aria-label="Wiring from the ESP32-S3-mini pins IO2, IO4, IO6, IO8 and IO10 through two-stage 10 kilohm and 100 nanofarad filters to the board end of each cut stick and wheel signal wire on the RC-N1, with one shared ground wire."><style>
+text{font-family:ui-monospace,Menlo,Consolas,monospace;fill:#1c2226}
+.blk{font:600 15px ui-monospace,Menlo,monospace}.hdr{font:500 11px ui-monospace,monospace;letter-spacing:.08em;fill:#5d676d}
+.pin{font:600 14px ui-monospace,monospace}.fn,.val,.note{font:400 11px ui-monospace,monospace;fill:#5d676d}.val{font-weight:500}
+.rcl{font:500 12.5px ui-monospace,monospace}
+.block{fill:#ffffff;stroke:#1c2226;stroke-width:1.5}.sig{fill:none;stroke:#b4561c;stroke-width:2;stroke-linejoin:round}
+.plate{stroke:#b4561c;stroke-width:3}.gnd,.gndw{stroke:#5d676d;stroke-width:1.6;fill:none}.gndw{stroke-width:2.2}
+.usb{stroke:#1c2226;stroke-width:2}.board{stroke:#1f6f8b;stroke-width:2.4}.dead{stroke:#5d676d;stroke-width:2;stroke-dasharray:2 4}
+.ins{fill:#b3261e}.cut{stroke:#b3261e;stroke-width:2.4}.node{fill:#b4561c}.pad{fill:#ffffff;stroke:#1c2226;stroke-width:1.6}
+</style><rect width="100%" height="100%" fill="#f6f7f4"/>
+<rect class="block" x="40" y="40" width="170" height="550" rx="6"/>
+<text class="blk" x="125.0" y="64" text-anchor="middle">ESP32-S3-mini</text>
+<text class="note" x="125.0" y="80" text-anchor="middle">EnVision DevBoard</text>
+<line class="usb" x1="70" y1="40" x2="70" y2="16"/>
+<text class="note" x="78" y="20">USB-C → Jetson (power + serial)</text>
+<rect class="block" x="890" y="40" width="150" height="490" rx="6"/>
+<text class="blk" x="965.0" y="64" text-anchor="middle">RC main board</text>
+<text class="note" x="965.0" y="80" text-anchor="middle">glued connectors</text>
+<text class="hdr" x="390.0" y="40" text-anchor="middle">FILTER ×5  (10 kΩ · 100 nF, twice)</text>
+<text class="hdr" x="675.0" y="40" text-anchor="middle">CUT WIRE</text>
+<text class="pin" x="200" y="114" text-anchor="end">IO2</text>
+<text class="fn" x="200" y="128" text-anchor="end">roll</text>
+<circle class="pad" cx="210" cy="110" r="4"/>
+<line class="sig" x1="210" y1="110" x2="270" y2="110"/>
+<polyline class="sig" points="270,110 276,104 284,116 292,104 300,116 308,104 316,116 320,110"/>
+<text class="val" x="295" y="98" text-anchor="middle">10 kΩ</text>
+<line class="sig" x1="320" y1="110" x2="400" y2="110"/>
+<line class="sig" x1="360" y1="110" x2="360" y2="136"/>
+<line class="plate" x1="349" y1="136" x2="371" y2="136"/>
+<line class="plate" x1="349" y1="142" x2="371" y2="142"/>
+<line class="gnd" x1="360" y1="142" x2="360" y2="150"/>
+<line class="gnd" x1="350" y1="150.0" x2="370" y2="150.0"/>
+<line class="gnd" x1="353.5" y1="153.5" x2="366.5" y2="153.5"/>
+<line class="gnd" x1="357" y1="157.0" x2="363" y2="157.0"/>
+<text class="val" x="375" y="142">100 nF</text>
+<circle class="node" cx="360" cy="110" r="3.2"/>
+<polyline class="sig" points="400,110 406,104 414,116 422,104 430,116 438,104 446,116 450,110"/>
+<text class="val" x="425" y="98" text-anchor="middle">10 kΩ</text>
+<line class="sig" x1="450" y1="110" x2="820" y2="110"/>
+<line class="sig" x1="490" y1="110" x2="490" y2="136"/>
+<line class="plate" x1="479" y1="136" x2="501" y2="136"/>
+<line class="plate" x1="479" y1="142" x2="501" y2="142"/>
+<line class="gnd" x1="490" y1="142" x2="490" y2="150"/>
+<line class="gnd" x1="480" y1="150.0" x2="500" y2="150.0"/>
+<line class="gnd" x1="483.5" y1="153.5" x2="496.5" y2="153.5"/>
+<line class="gnd" x1="487" y1="157.0" x2="493" y2="157.0"/>
+<text class="val" x="505" y="142">100 nF</text>
+<circle class="node" cx="490" cy="110" r="3.2"/>
+<line class="sig" x1="820" y1="110" x2="820" y2="140"/>
+<circle class="pad" cx="600" cy="140" r="4"/>
+<line class="dead" x1="600" y1="140" x2="700" y2="140"/>
+<rect class="ins" x="698" y="134" width="10" height="12" rx="3"/>
+<line class="cut" x1="720" y1="130" x2="714" y2="150"/>
+<line class="cut" x1="748" y1="130" x2="742" y2="150"/>
+<line class="board" x1="750" y1="140" x2="890" y2="140"/>
+<circle class="node" cx="820" cy="140" r="3.6"/>
+<circle class="pad" cx="890" cy="140" r="4"/>
+<text class="rcl" x="596" y="163">Right stick · AD (left/right)</text>
+<text class="note" x="703" y="126" text-anchor="middle">heat-shrink</text>
+<text class="note" x="855.0" y="158" text-anchor="middle">board end</text>
+<text class="pin" x="200" y="206" text-anchor="end">IO4</text>
+<text class="fn" x="200" y="220" text-anchor="end">pitch</text>
+<circle class="pad" cx="210" cy="202" r="4"/>
+<line class="sig" x1="210" y1="202" x2="270" y2="202"/>
+<polyline class="sig" points="270,202 276,196 284,208 292,196 300,208 308,196 316,208 320,202"/>
+<text class="val" x="295" y="190" text-anchor="middle">10 kΩ</text>
+<line class="sig" x1="320" y1="202" x2="400" y2="202"/>
+<line class="sig" x1="360" y1="202" x2="360" y2="228"/>
+<line class="plate" x1="349" y1="228" x2="371" y2="228"/>
+<line class="plate" x1="349" y1="234" x2="371" y2="234"/>
+<line class="gnd" x1="360" y1="234" x2="360" y2="242"/>
+<line class="gnd" x1="350" y1="242.0" x2="370" y2="242.0"/>
+<line class="gnd" x1="353.5" y1="245.5" x2="366.5" y2="245.5"/>
+<line class="gnd" x1="357" y1="249.0" x2="363" y2="249.0"/>
+<text class="val" x="375" y="234">100 nF</text>
+<circle class="node" cx="360" cy="202" r="3.2"/>
+<polyline class="sig" points="400,202 406,196 414,208 422,196 430,208 438,196 446,208 450,202"/>
+<text class="val" x="425" y="190" text-anchor="middle">10 kΩ</text>
+<line class="sig" x1="450" y1="202" x2="820" y2="202"/>
+<line class="sig" x1="490" y1="202" x2="490" y2="228"/>
+<line class="plate" x1="479" y1="228" x2="501" y2="228"/>
+<line class="plate" x1="479" y1="234" x2="501" y2="234"/>
+<line class="gnd" x1="490" y1="234" x2="490" y2="242"/>
+<line class="gnd" x1="480" y1="242.0" x2="500" y2="242.0"/>
+<line class="gnd" x1="483.5" y1="245.5" x2="496.5" y2="245.5"/>
+<line class="gnd" x1="487" y1="249.0" x2="493" y2="249.0"/>
+<text class="val" x="505" y="234">100 nF</text>
+<circle class="node" cx="490" cy="202" r="3.2"/>
+<line class="sig" x1="820" y1="202" x2="820" y2="232"/>
+<circle class="pad" cx="600" cy="232" r="4"/>
+<line class="dead" x1="600" y1="232" x2="700" y2="232"/>
+<rect class="ins" x="698" y="226" width="10" height="12" rx="3"/>
+<line class="cut" x1="720" y1="222" x2="714" y2="242"/>
+<line class="cut" x1="748" y1="222" x2="742" y2="242"/>
+<line class="board" x1="750" y1="232" x2="890" y2="232"/>
+<circle class="node" cx="820" cy="232" r="3.6"/>
+<circle class="pad" cx="890" cy="232" r="4"/>
+<text class="rcl" x="596" y="255">Right stick · AD (up/down)</text>
+<text class="pin" x="200" y="298" text-anchor="end">IO6</text>
+<text class="fn" x="200" y="312" text-anchor="end">throttle</text>
+<circle class="pad" cx="210" cy="294" r="4"/>
+<line class="sig" x1="210" y1="294" x2="270" y2="294"/>
+<polyline class="sig" points="270,294 276,288 284,300 292,288 300,300 308,288 316,300 320,294"/>
+<text class="val" x="295" y="282" text-anchor="middle">10 kΩ</text>
+<line class="sig" x1="320" y1="294" x2="400" y2="294"/>
+<line class="sig" x1="360" y1="294" x2="360" y2="320"/>
+<line class="plate" x1="349" y1="320" x2="371" y2="320"/>
+<line class="plate" x1="349" y1="326" x2="371" y2="326"/>
+<line class="gnd" x1="360" y1="326" x2="360" y2="334"/>
+<line class="gnd" x1="350" y1="334.0" x2="370" y2="334.0"/>
+<line class="gnd" x1="353.5" y1="337.5" x2="366.5" y2="337.5"/>
+<line class="gnd" x1="357" y1="341.0" x2="363" y2="341.0"/>
+<text class="val" x="375" y="326">100 nF</text>
+<circle class="node" cx="360" cy="294" r="3.2"/>
+<polyline class="sig" points="400,294 406,288 414,300 422,288 430,300 438,288 446,300 450,294"/>
+<text class="val" x="425" y="282" text-anchor="middle">10 kΩ</text>
+<line class="sig" x1="450" y1="294" x2="820" y2="294"/>
+<line class="sig" x1="490" y1="294" x2="490" y2="320"/>
+<line class="plate" x1="479" y1="320" x2="501" y2="320"/>
+<line class="plate" x1="479" y1="326" x2="501" y2="326"/>
+<line class="gnd" x1="490" y1="326" x2="490" y2="334"/>
+<line class="gnd" x1="480" y1="334.0" x2="500" y2="334.0"/>
+<line class="gnd" x1="483.5" y1="337.5" x2="496.5" y2="337.5"/>
+<line class="gnd" x1="487" y1="341.0" x2="493" y2="341.0"/>
+<text class="val" x="505" y="326">100 nF</text>
+<circle class="node" cx="490" cy="294" r="3.2"/>
+<line class="sig" x1="820" y1="294" x2="820" y2="324"/>
+<circle class="pad" cx="600" cy="324" r="4"/>
+<line class="dead" x1="600" y1="324" x2="700" y2="324"/>
+<rect class="ins" x="698" y="318" width="10" height="12" rx="3"/>
+<line class="cut" x1="720" y1="314" x2="714" y2="334"/>
+<line class="cut" x1="748" y1="314" x2="742" y2="334"/>
+<line class="board" x1="750" y1="324" x2="890" y2="324"/>
+<circle class="node" cx="820" cy="324" r="3.6"/>
+<circle class="pad" cx="890" cy="324" r="4"/>
+<text class="rcl" x="596" y="347">Left stick · AD (up/down)</text>
+<text class="pin" x="200" y="390" text-anchor="end">IO8</text>
+<text class="fn" x="200" y="404" text-anchor="end">yaw</text>
+<circle class="pad" cx="210" cy="386" r="4"/>
+<line class="sig" x1="210" y1="386" x2="270" y2="386"/>
+<polyline class="sig" points="270,386 276,380 284,392 292,380 300,392 308,380 316,392 320,386"/>
+<text class="val" x="295" y="374" text-anchor="middle">10 kΩ</text>
+<line class="sig" x1="320" y1="386" x2="400" y2="386"/>
+<line class="sig" x1="360" y1="386" x2="360" y2="412"/>
+<line class="plate" x1="349" y1="412" x2="371" y2="412"/>
+<line class="plate" x1="349" y1="418" x2="371" y2="418"/>
+<line class="gnd" x1="360" y1="418" x2="360" y2="426"/>
+<line class="gnd" x1="350" y1="426.0" x2="370" y2="426.0"/>
+<line class="gnd" x1="353.5" y1="429.5" x2="366.5" y2="429.5"/>
+<line class="gnd" x1="357" y1="433.0" x2="363" y2="433.0"/>
+<text class="val" x="375" y="418">100 nF</text>
+<circle class="node" cx="360" cy="386" r="3.2"/>
+<polyline class="sig" points="400,386 406,380 414,392 422,380 430,392 438,380 446,392 450,386"/>
+<text class="val" x="425" y="374" text-anchor="middle">10 kΩ</text>
+<line class="sig" x1="450" y1="386" x2="820" y2="386"/>
+<line class="sig" x1="490" y1="386" x2="490" y2="412"/>
+<line class="plate" x1="479" y1="412" x2="501" y2="412"/>
+<line class="plate" x1="479" y1="418" x2="501" y2="418"/>
+<line class="gnd" x1="490" y1="418" x2="490" y2="426"/>
+<line class="gnd" x1="480" y1="426.0" x2="500" y2="426.0"/>
+<line class="gnd" x1="483.5" y1="429.5" x2="496.5" y2="429.5"/>
+<line class="gnd" x1="487" y1="433.0" x2="493" y2="433.0"/>
+<text class="val" x="505" y="418">100 nF</text>
+<circle class="node" cx="490" cy="386" r="3.2"/>
+<line class="sig" x1="820" y1="386" x2="820" y2="416"/>
+<circle class="pad" cx="600" cy="416" r="4"/>
+<line class="dead" x1="600" y1="416" x2="700" y2="416"/>
+<rect class="ins" x="698" y="410" width="10" height="12" rx="3"/>
+<line class="cut" x1="720" y1="406" x2="714" y2="426"/>
+<line class="cut" x1="748" y1="406" x2="742" y2="426"/>
+<line class="board" x1="750" y1="416" x2="890" y2="416"/>
+<circle class="node" cx="820" cy="416" r="3.6"/>
+<circle class="pad" cx="890" cy="416" r="4"/>
+<text class="rcl" x="596" y="439">Left stick · AD (left/right)</text>
+<text class="pin" x="200" y="482" text-anchor="end">IO10</text>
+<text class="fn" x="200" y="496" text-anchor="end">wheel</text>
+<circle class="pad" cx="210" cy="478" r="4"/>
+<line class="sig" stroke-dasharray="5 4" x1="210" y1="478" x2="270" y2="478"/>
+<polyline class="sig" points="270,478 276,472 284,484 292,472 300,484 308,472 316,484 320,478"/>
+<text class="val" x="295" y="466" text-anchor="middle">10 kΩ</text>
+<line class="sig" stroke-dasharray="5 4" x1="320" y1="478" x2="400" y2="478"/>
+<line class="sig" x1="360" y1="478" x2="360" y2="504"/>
+<line class="plate" x1="349" y1="504" x2="371" y2="504"/>
+<line class="plate" x1="349" y1="510" x2="371" y2="510"/>
+<line class="gnd" x1="360" y1="510" x2="360" y2="518"/>
+<line class="gnd" x1="350" y1="518.0" x2="370" y2="518.0"/>
+<line class="gnd" x1="353.5" y1="521.5" x2="366.5" y2="521.5"/>
+<line class="gnd" x1="357" y1="525.0" x2="363" y2="525.0"/>
+<text class="val" x="375" y="510">100 nF</text>
+<circle class="node" cx="360" cy="478" r="3.2"/>
+<polyline class="sig" points="400,478 406,472 414,484 422,472 430,484 438,472 446,484 450,478"/>
+<text class="val" x="425" y="466" text-anchor="middle">10 kΩ</text>
+<line class="sig" stroke-dasharray="5 4" x1="450" y1="478" x2="820" y2="478"/>
+<line class="sig" x1="490" y1="478" x2="490" y2="504"/>
+<line class="plate" x1="479" y1="504" x2="501" y2="504"/>
+<line class="plate" x1="479" y1="510" x2="501" y2="510"/>
+<line class="gnd" x1="490" y1="510" x2="490" y2="518"/>
+<line class="gnd" x1="480" y1="518.0" x2="500" y2="518.0"/>
+<line class="gnd" x1="483.5" y1="521.5" x2="496.5" y2="521.5"/>
+<line class="gnd" x1="487" y1="525.0" x2="493" y2="525.0"/>
+<text class="val" x="505" y="510">100 nF</text>
+<circle class="node" cx="490" cy="478" r="3.2"/>
+<line class="sig" stroke-dasharray="5 4" x1="820" y1="478" x2="820" y2="508"/>
+<circle class="pad" cx="600" cy="508" r="4"/>
+<line class="dead" x1="600" y1="508" x2="700" y2="508"/>
+<rect class="ins" x="698" y="502" width="10" height="12" rx="3"/>
+<line class="cut" x1="720" y1="498" x2="714" y2="518"/>
+<line class="cut" x1="748" y1="498" x2="742" y2="518"/>
+<line class="board" x1="750" y1="508" x2="890" y2="508"/>
+<circle class="node" cx="820" cy="508" r="3.6"/>
+<circle class="pad" cx="890" cy="508" r="4"/>
+<text class="rcl" x="596" y="531">Wheel sensor · signal wire</text>
+<text class="pin" x="200" y="594" text-anchor="end">GND</text>
+<circle class="pad" cx="210" cy="590" r="4"/>
+<line class="gndw" x1="210" y1="590" x2="930" y2="590"/>
+<line class="gnd" x1="415.0" y1="590.0" x2="435.0" y2="590.0"/>
+<line class="gnd" x1="418.5" y1="593.5" x2="431.5" y2="593.5"/>
+<line class="gnd" x1="422.0" y1="597.0" x2="428.0" y2="597.0"/>
+<text class="note" x="425.0" y="616" text-anchor="middle">every ⏚ above is this rail</text>
+<circle class="pad" cx="930" cy="590" r="4"/>
+<text class="rcl" x="1040" y="581" text-anchor="end">RC GND</text>
+<text class="note" x="1040" y="609" text-anchor="end">stick module GND pad</text>
+<text class="note" x="1040" y="634" text-anchor="end">Left as is on each module: 3V3, GND, C1 wires</text>
+</svg>

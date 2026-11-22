@@ -42,6 +42,13 @@ and the README to an LLM and ask it about your step.
 
 ## Wiring summary
 
+![ESP32 to RC-N1C wiring](wiring.svg)
+
+![One signal wire, before and after the cut](cut_wire.svg)
+
+The pin-to-axis labels are the intended map; on the RC built here, IO6/IO8 turned out to
+drive yaw/throttle (swapped), which the calibration handles.
+
 Per channel: ESP32 pin → 10 kΩ → node A (100 nF to GND) → 10 kΩ → node B (100 nF to GND)
 → main-board end of the cut AD wire. Sensor end of the cut wire: insulate. One ground
 wire from ESP32 GND to a stick module GND pad. Do not connect the ESP32's 3.3 V or 5 V to
